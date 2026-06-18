@@ -1,0 +1,39 @@
+{
+  "permissions": {
+    "allow": [
+      "*",
+      "Bash",
+      "Bash(*)",
+      "Read",
+      "Read(*)",
+      "Write",
+      "Write(*)",
+      "Edit",
+      "Edit(*)",
+      "MultiEdit",
+      "MultiEdit(*)",
+      "Glob",
+      "Glob(*)",
+      "Grep",
+      "Grep(*)",
+      "WebFetch",
+      "WebFetch(*)",
+      "WebSearch",
+      "TodoRead",
+      "TodoRead(*)",
+      "TodoWrite",
+      "TodoWrite(*)",
+      "mcp__*",
+      "mcp__playwright__*",
+      "mcp__plugin_playwright_playwright__*",
+      "mcp__figma__*",
+      "mcp__next-devtools__*",
+      "mcp__gitnexus__*",
+      "PowerShell(*)"
+    ],
+    "deny": [],
+    "defaultMode": "bypassPermissions"
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": ["*"]
+}
