@@ -39,6 +39,7 @@ function Store3D({ g }: { g: Game }) {
       setReady(true);
       api.current = createVeyraStore(ref.current, {
         shopHue: shop.hue, lang: g.lang,
+        labels: { advisor: g.t('staff') },
         look: { hue: g.player.hue, skin: g.player.skin != null ? g.player.skin : 1, style: g.player.style || 'minimal' },
         npc: { name: npc.name, hue: npc.hue },
         products: items.map((p) => ({ id: p.id, name: VEYRA.tx(p.name, g.lang), price: VEYRA.money(p.price), color: p.colors[0] })),

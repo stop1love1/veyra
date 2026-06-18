@@ -1,9 +1,10 @@
 // @ts-nocheck -- ported vanilla three.js engine; internals intentionally untyped
-// world3d.js — Veyra walkable 3D world (three.js). Plain script; reads window.THREE.
-// window.createVeyraWorld(container, opts) -> { dispose, setLang }
+// world.ts — Veyra walkable 3D world (three.js ES module).
+// createVeyraWorld(container, opts) -> { dispose, recenter }
 // opts: { playerHue, lite, shops:[{id,hue,name}], onProximity(shop|null) }
 
 import * as THREE from 'three';
+import { buildAvatar } from './shared/avatar';
 
 export function createVeyraWorld(container, opts) {
   opts = opts || {};
@@ -393,34 +394,11 @@ export function createVeyraWorld(container, opts) {
     lamp(Math.cos(a) * 54, Math.sin(a) * 54);
   }
 
-  // ── Character ────────────────────────────────────────────
-  const SKIN = '#e8b894', PANTS = hsl(playerHue, .35, .3), HAIR = hsl(playerHue, .4, .22);
-  const cloth = hsl(playerHue, .55, .52);
-  const player = new THREE.Group();
-  const parts = {};
-  function capsule(r, len, mat) { const m = new THREE.Mesh(new THREE.CapsuleGeometry(r, len, 6, 12), mat); m.castShadow = true; return m; }
-  const clothMat = new THREE.MeshStandardMaterial({ color: cloth, roughness: .8 });
-  const skinMat = new THREE.MeshStandardMaterial({ color: SKIN, roughness: .9 });
-  const pantsMat = new THREE.MeshStandardMaterial({ color: PANTS, roughness: .9 });
-
-  const torso = capsule(.26, .5, clothMat); torso.position.y = 1.05; player.add(torso);
-  const head = new THREE.Mesh(new THREE.SphereGeometry(.26, 18, 18), skinMat); head.position.y = 1.62; head.castShadow = true; player.add(head);
-  const hair = new THREE.Mesh(new THREE.SphereGeometry(.285, 16, 16, 0, Math.PI * 2, 0, Math.PI * 0.62),
-    new THREE.MeshStandardMaterial({ color: HAIR, roughness: 1 }));
-  hair.position.set(0, 1.66, -0.02); player.add(hair);
-
-  function limb(x, y, r, len, mat) {
-    const pivot = new THREE.Group(); pivot.position.set(x, y, 0);
-    const m = capsule(r, len, mat); m.position.y = -(len / 2 + r); pivot.add(m);
-    player.add(pivot); return pivot;
-  }
-  parts.armL = limb(-0.33, 1.28, .08, .4, clothMat);
-  parts.armR = limb(0.33, 1.28, .08, .4, clothMat);
-  parts.legL = limb(-0.13, 0.78, .1, .42, pantsMat);
-  parts.legR = limb(0.13, 0.78, .1, .42, pantsMat);
-  // hands + feet
-  [parts.armL, parts.armR].forEach(a => { const h = new THREE.Mesh(new THREE.SphereGeometry(.09, 8, 8), skinMat); h.position.y = -.62; a.add(h); });
-  [parts.legL, parts.legR].forEach(l => { const f = new THREE.Mesh(new THREE.BoxGeometry(.18, .12, .3), pantsMat); f.position.set(0, -.66, .06); f.castShadow = true; l.add(f); });
+  // ── Character (shared avatar builder) ────────────────────
+  const av = buildAvatar({ hue: playerHue, skinColor: '#e8b894', hairLight: 0.22, style: 'minimal' });
+  const player = av.group;
+  const parts = av.parts;
+  const torso = parts.torso;
 
   scene.add(player);
   player.position.set(0, 0, 16);
@@ -738,17 +716,27 @@ export function createVeyraWorld(container, opts) {
   });
   ro.observe(container);
 
+  // Pause rendering while the tab is hidden (saves battery on mobile).
+  let disposed = false;
+  const onVisibility = () => {
+    if (disposed) return;
+    if (document.hidden) { running = false; cancelAnimationFrame(raf); }
+    else if (!running) { running = true; last = performance.now(); raf = requestAnimationFrame(frame); }
+  };
+  document.addEventListener('visibilitychange', onVisibility);
+
   // ── API ──────────────────────────────────────────────────
   return {
     dispose() {
-      running = false; cancelAnimationFrame(raf);
+      disposed = true; running = false; cancelAnimationFrame(raf);
       ro.disconnect();
+      document.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('keydown', kd); window.removeEventListener('keyup', ku);
       dom.removeEventListener('pointerdown', camDown); dom.removeEventListener('pointermove', camMove);
       dom.removeEventListener('pointerup', camUp); dom.removeEventListener('pointercancel', camUp);
       dom.removeEventListener('wheel', onWheel);
       renderer.dispose();
-      scene.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) { (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => m.dispose()); } });
+      scene.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) { (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => { if (m.map) m.map.dispose(); m.dispose(); }); } });
       if (renderer.domElement.parentNode) renderer.domElement.parentNode.removeChild(renderer.domElement);
       if (base.parentNode) base.parentNode.removeChild(base);
       if (mini.parentNode) mini.parentNode.removeChild(mini);

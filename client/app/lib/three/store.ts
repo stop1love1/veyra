@@ -1,10 +1,11 @@
 // @ts-nocheck -- ported vanilla three.js engine; internals intentionally untyped
-// store3d.js — Veyra walkable 3D shop interior. Reads window.THREE.
-// window.createVeyraStore(container, opts) -> { dispose }
+// store.ts — Veyra walkable 3D shop interior (three.js ES module).
+// createVeyraStore(container, opts) -> { dispose }
 // opts: { shopHue, look:{hue,skin,style}, products:[{id,name,price,color}], npc:{name,hue},
 //         labels:{exit}, onProximity(poi|null), onExit() }
 
 import * as THREE from 'three';
+import { buildAvatar } from './shared/avatar';
 
 export function createVeyraStore(container, opts) {
   opts = opts || {};
@@ -124,29 +125,8 @@ export function createVeyraStore(container, opts) {
     labels.push(m); return m;
   }
 
-  // ── Person builder (player + NPC) ────────────────────────
-  function buildPerson(cfg) {
-    const grp = new THREE.Group();
-    const clothM = new THREE.MeshStandardMaterial({ color: hsl(cfg.hue, .55, .52), roughness: .8 });
-    const pantsM = new THREE.MeshStandardMaterial({ color: hsl(cfg.hue, .35, .3), roughness: .85 });
-    const skinM = new THREE.MeshStandardMaterial({ color: cfg.skinColor || SKINS[1], roughness: .9 });
-    const hairM = new THREE.MeshStandardMaterial({ color: hsl(cfg.hue, .4, .2), roughness: 1 });
-    const cap = (r, len, m) => { const x = new THREE.Mesh(new THREE.CapsuleGeometry(r, len, 6, 12), m); x.castShadow = true; return x; };
-    const torso = cap(.26, .5, clothM); torso.position.y = 1.05; grp.add(torso);
-    const head = new THREE.Mesh(new THREE.SphereGeometry(.26, 18, 18), skinM); head.position.y = 1.62; head.castShadow = true; grp.add(head);
-    const hair = new THREE.Mesh(new THREE.SphereGeometry(.285, 16, 16, 0, Math.PI * 2, 0, Math.PI * .62), hairM); hair.position.set(0, 1.66, -.02); grp.add(hair);
-    function limb(x, y, r, len, m) { const p = new THREE.Group(); p.position.set(x, y, 0); const mm = cap(r, len, m); mm.position.y = -(len / 2 + r); p.add(mm); grp.add(p); return p; }
-    const armL = limb(-.33, 1.28, .08, .4, clothM), armR = limb(.33, 1.28, .08, .4, clothM);
-    const legL = limb(-.13, .78, .1, .42, pantsM), legR = limb(.13, .78, .1, .42, pantsM);
-    [armL, armR].forEach(a => { const h = new THREE.Mesh(new THREE.SphereGeometry(.09, 8, 8), skinM); h.position.y = -.62; a.add(h); });
-    [legL, legR].forEach(l => { const f = new THREE.Mesh(new THREE.BoxGeometry(.18, .12, .3), pantsM); f.position.set(0, -.66, .06); f.castShadow = true; l.add(f); });
-    if (cfg.style === 'street') { const crown = new THREE.Mesh(new THREE.CylinderGeometry(.27, .29, .22, 14), clothM); crown.position.y = 1.86; grp.add(crown); const visor = new THREE.Mesh(new THREE.BoxGeometry(.46, .06, .32), clothM); visor.position.set(0, 1.78, .26); grp.add(visor); }
-    if (cfg.style === 'soft') { const tunic = new THREE.Mesh(new THREE.ConeGeometry(.46, .7, 16, 1, true), clothM); tunic.position.y = .78; grp.add(tunic); }
-    return { group: grp, parts: { armL, armR, legL, legR, torso } };
-  }
-
-  // ── Player ───────────────────────────────────────────────
-  const player = buildPerson({ hue: look.hue, skinColor: SKINS[look.skin], style: look.style });
+  // ── Player (shared avatar builder) ───────────────────────
+  const player = buildAvatar({ hue: look.hue, skinColor: SKINS[look.skin], style: look.style });
   player.group.position.set(0, 0, RZ - 2.2);
   player.group.rotation.y = Math.PI; // face into room (-z)
   scene.add(player.group);
@@ -154,10 +134,10 @@ export function createVeyraStore(container, opts) {
   blob.rotation.x = -Math.PI / 2; blob.position.y = .08; scene.add(blob);
 
   // ── NPC stylist (back center) ────────────────────────────
-  const npc = buildPerson({ hue: npcInfo.hue, skinColor: SKINS[2], style: 'minimal' });
+  const npc = buildAvatar({ hue: npcInfo.hue, skinColor: SKINS[2], style: 'minimal' });
   npc.group.position.set(0, 0, -RZ + 1.8);
   scene.add(npc.group);
-  const npcLabel = makeLabel(npcInfo.name, (opts.lang === 'en' ? 'Advisor' : 'Tư vấn'), 1.9);
+  const npcLabel = makeLabel(npcInfo.name, (opts.labels && opts.labels.advisor) || (opts.lang === 'en' ? 'Advisor' : 'Tư vấn'), 1.9);
   npcLabel.position.set(0, 2.5, -RZ + 1.8); scene.add(npcLabel);
   const npcMarker = new THREE.Mesh(new THREE.TorusGeometry(.42, .07, 8, 20), new THREE.MeshBasicMaterial({ color: hsl(npcInfo.hue, .7, .6) }));
   npcMarker.position.set(0, 3.15, -RZ + 1.8); scene.add(npcMarker);
@@ -316,9 +296,19 @@ export function createVeyraStore(container, opts) {
   const ro = new ResizeObserver(() => { camera.aspect = W() / H(); camera.updateProjectionMatrix(); renderer.setSize(W(), H()); });
   ro.observe(container);
 
+  // Pause rendering while the tab is hidden (saves battery on mobile).
+  let disposed = false;
+  const onVisibility = () => {
+    if (disposed) return;
+    if (document.hidden) { running = false; cancelAnimationFrame(raf); }
+    else if (!running) { running = true; last = performance.now(); raf = requestAnimationFrame(frame); }
+  };
+  document.addEventListener('visibilitychange', onVisibility);
+
   return {
     dispose() {
-      running = false; cancelAnimationFrame(raf); ro.disconnect();
+      disposed = true; running = false; cancelAnimationFrame(raf); ro.disconnect();
+      document.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('keydown', kd); window.removeEventListener('keyup', ku);
       dom.removeEventListener('pointerdown', camDown); dom.removeEventListener('pointermove', camMove);
       dom.removeEventListener('pointerup', camUp); dom.removeEventListener('pointercancel', camUp);

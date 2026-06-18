@@ -5,6 +5,7 @@ import type { ComponentType } from 'react';
 import { useGameState } from './lib/game';
 import { useThemeTokens } from './lib/theme/tokens';
 import { Ic } from './components/ui';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { NpcDialogue, ProductPanel, DiegeticPanel } from './components/overlays';
 import {
   GateScreen, SplashScreen, CreateScreen, WorldScreen, StoreScreen,
@@ -40,7 +41,9 @@ export default function App() {
     <div className="v-root">
       <div className="v-stage">
         <div className="v-stage-scroll">
-          <Screen g={g} />
+          <ErrorBoundary>
+            <Screen g={g} />
+          </ErrorBoundary>
         </div>
         {g.npcOpen && <NpcDialogue g={g} />}
         {g.productOpen && <ProductPanel g={g} />}

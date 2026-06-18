@@ -62,11 +62,7 @@ export const STR: Record<string, Localized> = {
   recommended:    { vi: 'Stylist gợi ý',          en: 'Stylist picks' },
 };
 
-export const t = (key: string, lang: Lang): string => {
-  const e = STR[key];
-  if (!e) return key;
-  return e[lang] || e.vi;
-};
-
+// UI-key translation (t) now lives in lib/i18n and is backed by i18next.
+// `tx` stays here for content with embedded {vi,en} fields (products, shops…).
 export const tx = (obj: Localized | undefined, lang: Lang): string =>
   obj ? (obj[lang] || obj.vi) : '';

@@ -1,9 +1,10 @@
 // @ts-nocheck -- ported vanilla three.js engine; internals intentionally untyped
-// gate3d.js — Veyra entry: 3D gate + character customization + walk-in. Reads window.THREE.
-// window.createVeyraGate(container, opts) -> { dispose, setLook, enter, snapshot }
+// gate.ts — Veyra entry: 3D gate + character customization + walk-in (three.js ES module).
+// createVeyraGate(container, opts) -> { dispose, setLook, enter }
 // opts: { look:{hue,skin,style,name}, onEnter() }
 
 import * as THREE from 'three';
+import { buildAvatar } from './shared/avatar';
 
 export function createVeyraGate(container, opts) {
   opts = opts || {};
@@ -155,55 +156,20 @@ export function createVeyraGate(container, opts) {
     tree(x, z, .7 + Math.random() * .7);
   }
 
-  // ── Character builder ────────────────────────────────────
-  function buildChar(cfg) {
-    const grp = new THREE.Group();
-    const clothMat = new THREE.MeshStandardMaterial({ color: hsl(cfg.hue, .55, .52), roughness: .8 });
-    const pantsMat = new THREE.MeshStandardMaterial({ color: hsl(cfg.hue, .35, .3), roughness: .85 });
-    const skinMat = new THREE.MeshStandardMaterial({ color: cfg.skinColor || SKINS[1], roughness: .9 });
-    const hairMat = new THREE.MeshStandardMaterial({ color: hsl(cfg.hue, .4, .2), roughness: 1 });
-    const cap = (r, len, mat) => { const m = new THREE.Mesh(new THREE.CapsuleGeometry(r, len, 6, 12), mat); m.castShadow = true; return m; };
-    const torso = cap(.26, .5, clothMat); torso.position.y = 1.05; grp.add(torso);
-    const head = new THREE.Mesh(new THREE.SphereGeometry(.26, 18, 18), skinMat); head.position.y = 1.62; head.castShadow = true; grp.add(head);
-    const hair = new THREE.Mesh(new THREE.SphereGeometry(.285, 16, 16, 0, Math.PI * 2, 0, Math.PI * .62), hairMat);
-    hair.position.set(0, 1.66, -.02); grp.add(hair);
-    function limb(x, y, r, len, mat) {
-      const p = new THREE.Group(); p.position.set(x, y, 0);
-      const m = cap(r, len, mat); m.position.y = -(len / 2 + r); p.add(m); grp.add(p); return p;
-    }
-    const armL = limb(-.33, 1.28, .08, .4, clothMat), armR = limb(.33, 1.28, .08, .4, clothMat);
-    const legL = limb(-.13, .78, .1, .42, pantsMat), legR = limb(.13, .78, .1, .42, pantsMat);
-    [armL, armR].forEach(a => { const h = new THREE.Mesh(new THREE.SphereGeometry(.09, 8, 8), skinMat); h.position.y = -.62; a.add(h); });
-    [legL, legR].forEach(l => { const f = new THREE.Mesh(new THREE.BoxGeometry(.18, .12, .3), pantsMat); f.position.set(0, -.66, .06); f.castShadow = true; l.add(f); });
-
-    // style accessories
-    const capHat = new THREE.Group();
-    const crown = new THREE.Mesh(new THREE.CylinderGeometry(.27, .29, .22, 14), clothMat); crown.position.y = 1.86;
-    const visor = new THREE.Mesh(new THREE.BoxGeometry(.46, .06, .32), clothMat); visor.position.set(0, 1.78, .26);
-    capHat.add(crown, visor); grp.add(capHat);
-    const tunic = new THREE.Mesh(new THREE.ConeGeometry(.46, .7, 16, 1, true), clothMat);
-    tunic.position.y = .78; grp.add(tunic);
-
-    return {
-      group: grp, mats: { clothMat, pantsMat, skinMat, hairMat },
-      parts: { armL, armR, legL, legR, torso, head, hair },
-      acc: { capHat, tunic },
-    };
-  }
-
+  // ── Characters (shared avatar builder) ───────────────────
   // player
-  const player = buildChar({ hue: look.hue, skinColor: SKINS[look.skin] });
-  player.group.position.set(0, 0, 0);
-  player.group.rotation.y = 0; // face the camera for customization
+  const player = buildAvatar({ hue: look.hue, skinColor: SKINS[look.skin] });
+  player.group.position.set(0, 0, 6);
+  player.group.rotation.y = Math.PI; // face the gate (-z); player walks up to it
   scene.add(player.group);
   const blob = new THREE.Mesh(new THREE.CircleGeometry(.5, 20),
     new THREE.MeshBasicMaterial({ color: '#10302d', transparent: true, opacity: .28 }));
   blob.rotation.x = -Math.PI / 2; blob.position.set(0, .04, 0); scene.add(blob);
 
   // guard
-  const guard = buildChar({ hue: 200, skinColor: SKINS[2] });
-  guard.group.position.set(-3.6, 0, GZ + 2.2);
-  guard.group.rotation.y = 0.5;
+  const guard = buildAvatar({ hue: 200, skinColor: SKINS[2] });
+  guard.group.position.set(0, 0, GZ + 3.0);   // centered, blocking the opening
+  guard.group.rotation.y = 0;                  // face the incoming player (+z)
   guard.mats.clothMat.color = hsl(195, .4, .34);
   guard.mats.pantsMat.color = hsl(195, .35, .22);
   scene.add(guard.group);
@@ -217,20 +183,16 @@ export function createVeyraGate(container, opts) {
   // bystanders (unregistered avatars outside)
   const byStanders = [];
   [[-4.2, -2.2, 130], [4.4, -1.6, 60], [-5.2, 1.4, 30], [5.0, 1.0, 280]].forEach(([x, z, h], i) => {
-    const c = buildChar({ hue: h, skinColor: SKINS[i % SKINS.length] });
+    const c = buildAvatar({ hue: h, skinColor: SKINS[i % SKINS.length] });
     c.group.position.set(x, 0, z);
     c.group.rotation.y = Math.random() * Math.PI * 2;
     c.group.scale.setScalar(.96);
-    applyStyle(c, ['minimal', 'street', 'soft'][i % 3]);
+    c.setStyle(['minimal', 'street', 'soft'][i % 3]);
     scene.add(c.group);
     byStanders.push({ c, ph: Math.random() * 6 });
   });
 
-  function applyStyle(ch, style) {
-    ch.acc.capHat.visible = style === 'street';
-    ch.acc.tunic.visible = style === 'soft';
-  }
-  applyStyle(player, look.style);
+  player.setStyle(look.style);
 
   // ── setLook (live) ───────────────────────────────────────
   function setLook(next) {
@@ -239,74 +201,155 @@ export function createVeyraGate(container, opts) {
     player.mats.pantsMat.color = hsl(look.hue, .35, .3);
     player.mats.hairMat.color = hsl(look.hue, .4, .2);
     player.mats.skinMat.color = new THREE.Color(SKINS[look.skin] || SKINS[1]);
-    applyStyle(player, look.style);
+    player.setStyle(look.style);
     // tint gate accents to chosen hue
     trimMat.color = hsl(look.hue, .45, .5);
     arch.material.color = hsl(look.hue, .65, .6);
   }
 
-  // ── Loop + enter animation ───────────────────────────────
+  // ── Controls: free roam (joystick + keyboard + orbit camera) ──
   const sstep = (a, b, t) => { const x = Math.max(0, Math.min(1, (t - a) / (b - a))); return x * x * (3 - 2 * x); };
+  const SPEED = 5.4;
+
+  const keys = {};
+  const onKey = (e, down) => {
+    const k = e.key.toLowerCase();
+    if (['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(k)) { keys[k] = down; e.preventDefault(); }
+  };
+  const kd = e => onKey(e, true), ku = e => onKey(e, false);
+  window.addEventListener('keydown', kd); window.addEventListener('keyup', ku);
+
+  const joy = { active: false, id: null, x: 0, y: 0, cx: 0, cy: 0 };
+  const base = document.createElement('div'); base.className = 'v-joy-base';
+  const knob = document.createElement('div'); knob.className = 'v-joy-knob';
+  base.appendChild(knob); container.appendChild(base);
+  const R = 52;
+  function joyStart(e) { joy.active = true; joy.id = e.pointerId; const r = base.getBoundingClientRect(); joy.cx = r.left + r.width / 2; joy.cy = r.top + r.height / 2; base.setPointerCapture(e.pointerId); joyMove(e); }
+  function joyMove(e) { if (!joy.active || e.pointerId !== joy.id) return; let dx = e.clientX - joy.cx, dy = e.clientY - joy.cy; const d = Math.hypot(dx, dy) || 1; if (d > R) { dx = dx / d * R; dy = dy / d * R; } knob.style.transform = `translate(${dx}px,${dy}px)`; joy.x = dx / R; joy.y = dy / R; }
+  function joyEnd(e) { if (e.pointerId !== joy.id) return; joy.active = false; joy.x = 0; joy.y = 0; knob.style.transform = 'translate(0,0)'; }
+  base.addEventListener('pointerdown', joyStart);
+  base.addEventListener('pointermove', joyMove);
+  base.addEventListener('pointerup', joyEnd);
+  base.addEventListener('pointercancel', joyEnd);
+
+  let camYaw = 0, camElev = 0.4, camDist = 9.5;
+  const dom = renderer.domElement;
+  const orbit = { pointers: new Map(), lastDist: 0 };
+  function camDown(e) { orbit.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY }); try { dom.setPointerCapture(e.pointerId); } catch (_) {} }
+  function camMove(e) {
+    if (!orbit.pointers.has(e.pointerId)) return;
+    const prev = orbit.pointers.get(e.pointerId);
+    const dx = e.clientX - prev.x, dy = e.clientY - prev.y;
+    orbit.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (orbit.pointers.size >= 2) {
+      const pts = [...orbit.pointers.values()];
+      const d = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      if (orbit.lastDist) camDist = Math.max(5, Math.min(15, camDist - (d - orbit.lastDist) * 0.05));
+      orbit.lastDist = d;
+    } else {
+      camYaw -= dx * 0.007;
+      camElev = Math.max(0.18, Math.min(0.9, camElev + dy * 0.005));
+    }
+  }
+  function camUp(e) { orbit.pointers.delete(e.pointerId); if (orbit.pointers.size < 2) orbit.lastDist = 0; }
+  dom.addEventListener('pointerdown', camDown);
+  dom.addEventListener('pointermove', camMove);
+  dom.addEventListener('pointerup', camUp);
+  dom.addEventListener('pointercancel', camUp);
+  const onWheel = (e) => { camDist = Math.max(5, Math.min(15, camDist + e.deltaY * 0.01)); e.preventDefault(); };
+  dom.addEventListener('wheel', onWheel, { passive: false });
+
+  // ── Guard barrier / proximity / gate ─────────────────────
+  const guardX0 = guard.group.position.x, guardZ = guard.group.position.z;
+  const barrierZ = guardZ + 1.5;        // player can't pass the guard until the gate opens
+  let gateOpen = false, gt = 0;          // gate-open animation timer
+  let atGuard = false, doneFired = false, phase = 0;
+  const camTarget = new THREE.Vector3(), tmp = new THREE.Vector3();
+
   let raf = 0, running = true, last = performance.now();
-  let entering = false, et = 0, doneFired = false, phase = 0;
-  let camTargetPos = camera.position.clone(), camTargetLook = camLook.clone();
 
   function frame(now) {
     if (!running) return;
     const dt = Math.min(.05, (now - last) / 1000); last = now;
     const t = now / 1000;
 
-    // idle: gentle breathing + bystanders sway
-    player.parts.torso.position.y = 1.05 + Math.sin(t * 1.4) * .015;
-    player.parts.armL.rotation.x = Math.sin(t * 1.4) * .04;
-    player.parts.armR.rotation.x = -Math.sin(t * 1.4) * .04;
-    byStanders.forEach((b, i) => {
+    // ambient life
+    byStanders.forEach((b) => {
       b.c.group.rotation.y += Math.sin(t * .6 + b.ph) * .003;
       b.c.parts.torso.position.y = 1.05 + Math.sin(t * 1.2 + b.ph) * .02;
     });
-    guard.parts.head.rotation.y = Math.sin(t * .5) * .25;
     flames.forEach((f, i) => { const s = 1 + Math.sin(t * 9 + i) * .12; f.scale.set(s, s + .1, s); });
     arch.rotation.z = Math.sin(t * .5) * .03;
+    if (!gateOpen) guard.parts.head.rotation.y = Math.sin(t * .5) * .2;
 
-    if (entering) {
-      et += dt;
-      // guard raises staff/arm
-      const ga = sstep(.2, 1.2, et);
-      guard.parts.armR.rotation.x = -ga * 2.2;
-      staff.rotation.z = -ga * .5;
-      // doors open
-      const dOpen = sstep(.7, 2.1, et);
-      doorL.rotation.y = dOpen * 2.0;
-      doorR.rotation.y = -dOpen * 2.0;
-      // player turn to face gate (-z)
-      const turn = sstep(1.7, 2.3, et);
-      player.group.rotation.y = turn * Math.PI; // 0 -> PI (faces -z, toward gate)
-      // walk forward through gate
-      if (et > 2.2) {
-        const wt = et - 2.2;
-        player.group.position.z = -Math.min(wt / 2.4, 1) * 17;
-        phase += dt * 12;
-        const sw = .7;
-        player.parts.legL.rotation.x = Math.sin(phase) * sw;
-        player.parts.legR.rotation.x = -Math.sin(phase) * sw;
-        player.parts.armL.rotation.x = -Math.sin(phase) * sw * .7;
-        player.parts.armR.rotation.x = Math.sin(phase) * sw * .7;
-        blob.position.z = player.group.position.z;
-      }
-      // camera dolly up/forward to watch walk-in
-      const cam2 = sstep(2.0, 4.4, et);
-      camTargetPos.set(0, 3.0 + cam2 * 2.2, 8.4 - cam2 * 2.5);
-      camTargetLook.set(0, 1.5, -3 - cam2 * 8);
-      if (et > 4.5 && !doneFired) { doneFired = true; opts.onEnter && opts.onEnter(); }
-    } else {
-      // subtle idle camera drift
-      camTargetPos.set(Math.sin(t * .25) * .4, 3.0, 8.4);
-      camTargetLook.set(0, 1.5, -3);
+    // ── input → movement (relative to camera yaw) ──
+    let ix = 0, iz = 0;
+    if (keys['w'] || keys['arrowup']) iz -= 1;
+    if (keys['s'] || keys['arrowdown']) iz += 1;
+    if (keys['a'] || keys['arrowleft']) ix -= 1;
+    if (keys['d'] || keys['arrowright']) ix += 1;
+    ix += joy.x; iz += joy.y;
+    let mag = Math.hypot(ix, iz); const moving = mag > 0.08;
+    if (mag > 1) { ix /= mag; iz /= mag; mag = 1; }
+
+    if (moving) {
+      const fwdX = -Math.sin(camYaw), fwdZ = -Math.cos(camYaw);
+      const rgtX = Math.cos(camYaw), rgtZ = -Math.sin(camYaw);
+      const mvx = rgtX * ix + fwdX * (-iz);
+      const mvz = rgtZ * ix + fwdZ * (-iz);
+      const p = player.group.position;
+      p.x += mvx * SPEED * dt;
+      p.z += mvz * SPEED * dt;
+      // play area
+      p.x = Math.max(-8.5, Math.min(8.5, p.x));
+      p.z = Math.min(15, p.z);
+      // invisible barrier across the opening until the guard lets you in
+      if (!gateOpen && p.z < barrierZ) p.z = barrierZ;
+      // funnel through the doorway when crossing the wall
+      if (p.z < GZ + 1.6) p.x = Math.max(-2.2, Math.min(2.2, p.x));
+      // face direction of travel
+      const targetRot = Math.atan2(mvx, mvz);
+      let diff = ((targetRot - player.group.rotation.y + Math.PI) % (Math.PI * 2)) - Math.PI;
+      player.group.rotation.y += diff * Math.min(1, dt * 12);
     }
 
-    camera.position.lerp(camTargetPos, Math.min(1, dt * 3));
-    camLook.lerp(camTargetLook, Math.min(1, dt * 3));
-    camera.lookAt(camLook);
+    // walk animation
+    const sp = moving ? mag : 0;
+    phase += dt * (6 + sp * 4) * (moving ? 1 : 0);
+    const swing = moving ? 0.7 * sp : 0;
+    const ease = (pt, v) => pt.rotation.x += (v - pt.rotation.x) * Math.min(1, dt * 14);
+    ease(player.parts.legL, Math.sin(phase) * swing);
+    ease(player.parts.legR, -Math.sin(phase) * swing);
+    ease(player.parts.armL, -Math.sin(phase) * swing * 0.7);
+    ease(player.parts.armR, Math.sin(phase) * swing * 0.7);
+    player.parts.torso.position.y = 1.05 + (moving ? Math.abs(Math.sin(phase)) * 0.04 : Math.sin(t * 1.4) * 0.015);
+    blob.position.set(player.group.position.x, .04, player.group.position.z);
+
+    // ── proximity to guard ──
+    const gd = Math.hypot(player.group.position.x - guard.group.position.x, player.group.position.z - guardZ);
+    const nowAt = gd < 3.0;
+    if (nowAt !== atGuard) { atGuard = nowAt; opts.onProximity && opts.onProximity(atGuard); }
+
+    // ── gate opening: doors swing, guard steps aside, barrier drops ──
+    if (gateOpen) {
+      gt += dt;
+      const dOpen = sstep(0, 1.3, gt);
+      doorL.rotation.y = dOpen * 2.0; doorR.rotation.y = -dOpen * 2.0;
+      const ga = sstep(0, 0.7, gt);
+      guard.group.position.x = guardX0 - ga * 3.0;
+      guard.parts.armR.rotation.x = -ga * 1.6; staff.rotation.z = -ga * 0.5;
+      // the player walks through on their own — fire once they cross the threshold
+      if (!doneFired && player.group.position.z < GZ - 0.4) { doneFired = true; opts.onEnter && opts.onEnter(); }
+    }
+
+    // ── third-person camera follow ──
+    const offX = camDist * Math.cos(camElev) * Math.sin(camYaw);
+    const offZ = camDist * Math.cos(camElev) * Math.cos(camYaw);
+    const offY = camDist * Math.sin(camElev);
+    camTarget.set(player.group.position.x + offX, 1.2 + offY, player.group.position.z + offZ);
+    camera.position.lerp(camTarget, Math.min(1, dt * 6));
+    tmp.set(player.group.position.x, 1.3, player.group.position.z);
+    camera.lookAt(tmp);
 
     renderer.render(scene, camera);
     raf = requestAnimationFrame(frame);
@@ -318,14 +361,29 @@ export function createVeyraGate(container, opts) {
   });
   ro.observe(container);
 
+  // Pause rendering while the tab is hidden (saves battery on mobile).
+  let disposed = false;
+  const onVisibility = () => {
+    if (disposed) return;
+    if (document.hidden) { running = false; cancelAnimationFrame(raf); }
+    else if (!running) { running = true; last = performance.now(); raf = requestAnimationFrame(frame); }
+  };
+  document.addEventListener('visibilitychange', onVisibility);
+
   return {
     setLook,
-    enter() { if (!entering) { entering = true; et = 0; } },
+    openGate() { if (!gateOpen) { gateOpen = true; gt = 0; } },
     dispose() {
-      running = false; cancelAnimationFrame(raf); ro.disconnect();
+      disposed = true; running = false; cancelAnimationFrame(raf); ro.disconnect();
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('keydown', kd); window.removeEventListener('keyup', ku);
+      dom.removeEventListener('pointerdown', camDown); dom.removeEventListener('pointermove', camMove);
+      dom.removeEventListener('pointerup', camUp); dom.removeEventListener('pointercancel', camUp);
+      dom.removeEventListener('wheel', onWheel);
       renderer.dispose();
-      scene.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => m.dispose()); });
+      scene.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => { if (m.map) m.map.dispose(); m.dispose(); }); });
       if (renderer.domElement.parentNode) renderer.domElement.parentNode.removeChild(renderer.domElement);
+      if (base.parentNode) base.parentNode.removeChild(base);
     },
   };
 };
