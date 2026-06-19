@@ -391,6 +391,8 @@ export function createVeyraWorld(container, opts) {
   const waterWindShift = new THREE.Vector2(0, 0); // accumulated downwind drift of the ripples
   let birdMesh = null;         // instanced bird flock (built in build())
   const birdParams = [];       // per-bird orbit params
+  const charMixers = [];       // AnimationMixers for the animated hero NPCs
+  const charRoots = [];        // their root Object3Ds (cleaned up on dispose)
   // Tree foliage wind-sway uniforms (bound in build() onBeforeCompile).
   const swayUniforms = { uTime: { value: 0 }, uWind: { value: 0 }, uWindDir: { value: 0 } };
 
@@ -1106,6 +1108,60 @@ export function createVeyraWorld(container, opts) {
       new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.26 }));
     blob.rotation.x = -Math.PI / 2; blob.position.y = 0.05; scene.add(blob);
     setNameTag(opts.playerName || '');   // float the username above the player (if signed in)
+
+    // ── Animated hero NPCs (Kenney Mini-Characters, CC0): a handful of real,
+    //    idle-animated people along the lakeside promenade + near spawn. The dense
+    //    distant crowd stays the cheap procedural `people`. Skipped on low tier and
+    //    fully guarded so a missing GLB never breaks the world. ──
+    if (q.tier !== 'low') {
+      try {
+        const [{ GLTFLoader }, skUtils] = await Promise.all([
+          import('three/addons/loaders/GLTFLoader.js'),
+          import('three/addons/utils/SkeletonUtils.js'),
+        ]);
+        const loader = new GLTFLoader();
+        const CHAR_URLS = [
+          '/models/people/character-male-a.glb', '/models/people/character-male-c.glb', '/models/people/character-male-e.glb',
+          '/models/people/character-female-a.glb', '/models/people/character-female-c.glb', '/models/people/character-female-e.glb',
+        ];
+        const gltfs = (await Promise.all(CHAR_URLS.map((u) =>
+          new Promise((res) => loader.load(u, (g) => res(g), undefined, () => res(null)))))).filter(Boolean);
+        if (!disposed && gltfs.length) {
+          const npcCount = q.tier === 'high' ? 18 : 11;
+          const pts = [];
+          // lakeside promenade arc on the north shore
+          const arcN = Math.round(npcCount * 0.7);
+          for (let i = 0; i < arcN; i++) {
+            const a = -Math.PI / 2 + (i / Math.max(1, arcN - 1) - 0.5) * 1.3;
+            pts.push({ x: lakeCx + Math.cos(a) * (lakeR * 0.95), z: lakeNorthZ - 2 + Math.sin(a) * 3 });
+          }
+          // a few milling near the spawn
+          for (let i = arcN; i < npcCount; i++) {
+            pts.push({ x: SPAWN.x + (hash01(i * 1.7, 7) - 0.5) * 10, z: SPAWN.z + (hash01(i * 2.3, 9) - 0.5) * 10 });
+          }
+          const box = new THREE.Box3();
+          for (let i = 0; i < pts.length; i++) {
+            const g = gltfs[i % gltfs.length];
+            const root = skUtils.clone(g.scene);
+            box.setFromObject(root);
+            const h = (box.max.y - box.min.y) || 1;
+            const s = (1.6 + hash01(i, 3) * 0.25) / h;
+            root.scale.setScalar(s);
+            root.position.set(pts[i].x, -box.min.y * s, pts[i].z);
+            root.rotation.y = hash01(i * 2 + 1, 5) * Math.PI * 2;
+            root.traverse((o) => { if (o.isMesh) { o.castShadow = q.tier === 'high'; o.receiveShadow = false; } });
+            scene.add(root); charRoots.push(root);
+            if (g.animations && g.animations.length) {
+              const mixer = new THREE.AnimationMixer(root);
+              const clip = THREE.AnimationClip.findByName(g.animations, 'idle')
+                || g.animations.find((c) => /idle|stand/i.test(c.name)) || g.animations[0];
+              const act = mixer.clipAction(clip); act.time = hash01(i, 11) * 2; act.play();
+              charMixers.push(mixer);
+            }
+          }
+        }
+      } catch (_) { /* characters are optional — never break the world */ }
+    }
 
     // ── PERIMETER FENCE + four cardinal ticket gates (Đông/Tây/Nam/Bắc) + NPCs.
     //    Rings the playable core just beyond the clamp radius, broken by four
@@ -2378,6 +2434,7 @@ export function createVeyraWorld(container, opts) {
       }
       birdMesh.instanceMatrix.needsUpdate = true;
     }
+    for (let i = 0; i < charMixers.length; i++) charMixers[i].update(dt);   // animate hero NPCs
 
     for (let i = 0; i < interactables.length; i++) {
       const it = interactables[i];
@@ -2536,6 +2593,14 @@ export function createVeyraWorld(container, opts) {
         water = null;
       }
       if (waterNormals) { waterNormals.dispose(); waterNormals = null; }
+      // Animated NPCs: stop mixers + free their cloned skinned meshes.
+      for (const mx of charMixers) mx.stopAllAction();
+      charMixers.length = 0;
+      for (const root of charRoots) {
+        scene.remove(root);
+        root.traverse((o) => { if (o.isMesh && o.geometry) { try { o.geometry.dispose(); } catch (_) {} } });
+      }
+      charRoots.length = 0;
       texer.dispose();
       kit.dispose();
       for (const m of localMats) m.dispose();
