@@ -684,6 +684,26 @@ button:focus-visible,a:focus-visible,input:focus-visible,
   box-shadow:0 8px 22px rgba(0,0,0,.3);}
 .v-gatehint svg{color:var(--brand);flex:none;}
 
+/* ─── Account / profile dialog (centered card, opened from the HUD chip) ──── */
+.v-acctm-backdrop{position:fixed;inset:0;z-index:90;display:grid;place-items:center;padding:20px;
+  background:rgba(6,16,18,.5);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);animation:fadein .18s ease;}
+.v-acctm{position:relative;width:min(440px,100%);max-height:90vh;overflow:auto;box-sizing:border-box;
+  background:var(--paper);border-radius:22px;box-shadow:0 30px 80px rgba(6,20,20,.5);
+  padding:22px;display:flex;flex-direction:column;gap:18px;animation:acctm-pop .22s cubic-bezier(.2,.9,.3,1);}
+@keyframes fadein{from{opacity:0;}}
+@keyframes acctm-pop{from{opacity:0;transform:translateY(12px) scale(.98);}}
+.v-acctm-x{position:absolute;top:14px;right:14px;}
+.v-acctm-head{display:flex;align-items:center;gap:14px;padding-right:40px;}
+.v-acctm-id{display:flex;flex-direction:column;gap:2px;min-width:0;}
+.v-acctm-name{font-size:18px;font-weight:800;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:280px;}
+.v-acctm-mail{font-size:13px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:280px;}
+.v-acctm-role{align-self:flex-start;margin-top:3px;font-size:9px;text-transform:uppercase;letter-spacing:.06em;font-weight:700;
+  color:var(--brand-ink);background:color-mix(in oklab,var(--brand),transparent 82%);
+  border:1px solid color-mix(in oklab,var(--brand),transparent 60%);padding:3px 8px;border-radius:999px;}
+.v-acctm-body{display:flex;flex-direction:column;gap:16px;border-top:1px solid var(--line);padding-top:18px;}
+.v-acctm-foot{display:flex;gap:10px;border-top:1px solid var(--line);padding-top:16px;}
+.v-acctm-foot .v-btn{flex:1;}
+
 /* ═══ MINIMAP / responsive ───────────────────────────────── */
 @media (min-width:768px){
   /* On wide screens the joystick sits comfortably to the left edge */
@@ -700,7 +720,7 @@ button:focus-visible,a:focus-visible,input:focus-visible,
   .v-loader-ring{opacity:.85;}
   /* Shorten one-shot entrance/pop animations so they don't linger or jar. */
   .v-shopcard,.v-sheet,.v-dgt,.v-flash,.v-enter-prompt,.v-gate-panel,
-  .v-gate-reopen-wrap,.v-gate-hint,.v-guard,.v-ticket,.v-success-burst,
+  .v-gate-reopen-wrap,.v-gate-hint,.v-guard,.v-ticket,.v-acctm,.v-acctm-backdrop,.v-success-burst,
   .v-dock-btn.is-on,#v-bag-target.is-pop{
     animation-duration:.01ms !important;animation-iteration-count:1 !important;}
   /* Spatial screen transition: collapse every variant to a tiny plain fade,

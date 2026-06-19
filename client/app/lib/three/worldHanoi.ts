@@ -1366,30 +1366,35 @@ export function createVeyraWorld(container, opts) {
       // Two solid TIMBER GATE LEAVES fill the opening (only for guests). They
       // slide apart when openGate(key) accepts the ticket; their shared collision
       // is skipped once open. rec.openT animates 0 (shut) → 1 (open) in the loop.
-      if (gated) {
-        const barLen = halfGapM * 2;
-        const leafW = halfGapM;                 // each leaf covers half the gap
+      {
+        const inwardYaw = Math.atan2(Math.sin(g.a), -Math.cos(g.a)); // local +x → map centre
         rec.leaves = [];
+        rec.openT = 0; rec.openTarget = 0;
         for (const sgn of [-1, 1]) {
-          const cx = cxg + tx * sgn * (leafW / 2), cz = czg + tz * sgn * (leafW / 2);
-          const leaf = new THREE.Group();
-          leaf.position.set(cx, 0, cz); leaf.rotation.y = -tan;
-          const panel = new THREE.Mesh(new THREE.BoxGeometry(leafW * 0.98, 3.1, 0.18), darkWood);
-          panel.position.y = 1.65; panel.castShadow = true; panel.receiveShadow = true; leaf.add(panel); ownedGeoms.push(panel.geometry);
-          for (const by of [0.9, 2.4]) {        // two iron braces (accent)
-            const brace = new THREE.Mesh(new THREE.BoxGeometry(leafW * 0.98, 0.18, 0.22), redPaint);
-            brace.position.set(0, by, 0); leaf.add(brace); ownedGeoms.push(brace.geometry);
+          const hinge = new THREE.Group();
+          hinge.position.set(cxg + tx * sgn * halfGapM, 0, czg + tz * sgn * halfGapM); // at the pillar
+          const closedYaw = Math.atan2(sgn * tz, -sgn * tx);
+          hinge.rotation.y = closedYaw;
+          const panel = new THREE.Mesh(new THREE.BoxGeometry(halfGapM * 0.94, 3.1, 0.18), darkWood);
+          panel.position.set(halfGapM / 2, 1.65, 0); panel.castShadow = true; panel.receiveShadow = true;
+          hinge.add(panel); ownedGeoms.push(panel.geometry);
+          for (const by of [0.9, 2.4]) {       // two iron braces (accent)
+            const brace = new THREE.Mesh(new THREE.BoxGeometry(halfGapM * 0.92, 0.16, 0.22), redPaint);
+            brace.position.set(halfGapM / 2, by, 0); hinge.add(brace); ownedGeoms.push(brace.geometry);
           }
           const ring = new THREE.Mesh(new THREE.TorusGeometry(0.16, 0.04, 6, 12), pillarMat);
-          ring.position.set(-sgn * (leafW * 0.4), 1.6, 0.12); ring.rotation.x = Math.PI / 2; leaf.add(ring); ownedGeoms.push(ring.geometry);
-          scene.add(leaf);
-          rec.leaves.push({ grp: leaf, cx, cz, dx: tx * sgn, dz: tz * sgn, w: leafW });
+          ring.position.set(halfGapM * 0.9, 1.6, 0.12); ring.rotation.x = Math.PI / 2; hinge.add(ring); ownedGeoms.push(ring.geometry);
+          scene.add(hinge);
+          const d = inwardYaw - closedYaw;
+          rec.leaves.push({ grp: hinge, closedYaw, delta: Math.atan2(Math.sin(d), Math.cos(d)) });
         }
-        rec.openT = 0;
-        const steps = Math.max(4, Math.round(barLen / 2));
-        for (let s2 = 0; s2 <= steps; s2++) {
-          const tt2 = s2 / steps - 0.5;
-          circles.push({ x: cxg + tx * tt2 * barLen, z: czg + tz * tt2 * barLen, r: 1.5, gate: g.key });
+        if (gated) {
+          const barLen = halfGapM * 2;
+          const steps = Math.max(4, Math.round(barLen / 2));
+          for (let s2 = 0; s2 <= steps; s2++) {
+            const tt2 = s2 / steps - 0.5;
+            circles.push({ x: cxg + tx * tt2 * barLen, z: czg + tz * tt2 * barLen, r: 1.5, gate: g.key });
+          }
         }
       }
       // Two security guards flank each gate (just OUTSIDE, facing approaching
@@ -2506,13 +2511,15 @@ export function createVeyraWorld(container, opts) {
         it.marker.position.y = it.markerBaseY + Math.sin(t * 1.4 + i) * 0.12;
       }
 
-      // Gate leaves sliding open + lively guards (idle bob / look-around / sway).
+      // Gates swing open: signed-in players have them open on approach (the guards
+      // man the checkpoint) and close behind; guests' gates open on a valid ticket.
       for (const fg of fenceGates) {
         if (!fg.leaves) continue;
+        if (entered) { const gd = Math.hypot(pp.x - fg.x, pp.z - fg.z); fg.openTarget = gd < 14 ? 1 : 0; }
         const tgt = fg.openTarget || 0;
         if (Math.abs(fg.openT - tgt) > 0.001) {
           fg.openT += (tgt - fg.openT) * Math.min(1, dt * 2.6);
-          for (const lf of fg.leaves) lf.grp.position.set(lf.cx + lf.dx * lf.w * fg.openT, 0, lf.cz + lf.dz * lf.w * fg.openT);
+          for (const lf of fg.leaves) lf.grp.rotation.y = lf.closedYaw + lf.delta * fg.openT;
         }
       }
       for (let gi = 0; gi < liveGuards.length; gi++) {

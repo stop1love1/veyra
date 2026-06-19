@@ -1,8 +1,11 @@
+import { useState } from 'react';
 import { Avatar, Coin } from '../ui';
 import { LangChip } from './LangChip';
+import { AccountModal } from '../auth/AccountModal';
 import type { Game } from '../../lib/game/types';
 
 export function HudTop({ g }: { g: Game }) {
+  const [acct, setAcct] = useState(false);
   const u = g.auth.user;
 
   // Guests (not signed in) see NO account info: name / level / coins are local,
@@ -25,7 +28,9 @@ export function HudTop({ g }: { g: Game }) {
 
   return (
     <div className="v-hudtop">
-      <button className="v-hud-profile" onClick={() => g.go('create')} aria-label={g.t('account')}>
+      {/* Tapping the profile opens a compact account dialog (not a full screen). */}
+      <button className="v-hud-profile" onClick={() => setAcct(true)}
+              aria-label={g.t('account')} aria-haspopup="dialog">
         <Avatar hue={g.player.hue} size={38} />
         <div className="v-hud-pinfo">
           <span className="v-hud-pname">{name}</span>
@@ -41,6 +46,7 @@ export function HudTop({ g }: { g: Game }) {
         <Coin value={g.coins} />
         <LangChip g={g} dark inline />
       </div>
+      {acct && <AccountModal g={g} onClose={() => setAcct(false)} />}
     </div>
   );
 }
