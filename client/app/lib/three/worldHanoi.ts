@@ -72,7 +72,11 @@ export function createVeyraWorld(container, opts) {
   // Far plane is generous so the procedural skyline + sky read at full pull-back
   // (extentR*2.6 skyline + ~extentR*0.7 of camera dist + margin). Tightened to the
   // real extent once the data is known.
-  const camera = new THREE.PerspectiveCamera(52, W() / H(), 0.1, 4500);
+  // near is kept at 0.5 (not 0.1): with the very large far plane needed for the
+  // skyline, a tiny near wrecks depth-buffer precision and z-fights the near-flat
+  // lake/road/promenade layers (water shimmer/flicker). The camera is third-person
+  // and never sits closer than a couple of metres, so 0.5 clips nothing.
+  const camera = new THREE.PerspectiveCamera(52, W() / H(), 0.5, 4500);
   camera.position.set(0, 40, 120);
 
   // ── Environment (sky/sun/IBL/tonemap/fog) ────────────────
@@ -235,7 +239,7 @@ export function createVeyraWorld(container, opts) {
     // Reflection render-target: kept modest for a smooth extra full-scene pass on a
     // large OSM city (water reflections read fine at these sizes).
     const reflRT = q.tier === 'high' ? 512 : q.tier === 'mid' ? 256 : 128;
-    return new Water(geo, {
+    const w = new Water(geo, {
       textureWidth: reflRT,
       textureHeight: reflRT,
       waterNormals,
@@ -244,8 +248,15 @@ export function createVeyraWorld(container, opts) {
       waterColor: new THREE.Color().setHSL(168 / 360, 0.45, 0.22).getHex(), // jade Hoan Kiem
       distortionScale: 2.4,
       fog: !!scene.fog,
-      alpha: 0.92,
+      alpha: 0.95,
     });
+    // Bias the surface toward the camera so it reliably wins the z-test against the
+    // near-coplanar road/promenade/ground layers under the lake (no shimmer).
+    w.material.polygonOffset = true;
+    w.material.polygonOffsetFactor = -2;
+    w.material.polygonOffsetUnits = -2;
+    w.renderOrder = 1;
+    return w;
   }
 
   // ── Runtime state shared between the async build and the API/loop ─────────
@@ -1078,21 +1089,27 @@ export function createVeyraWorld(container, opts) {
       circles.push({ x: Math.cos(a) * FENCE_R, z: Math.sin(a) * FENCE_R, r: 1.4 });
     }
 
-    // Security-guard look: a capped, blue-uniformed avatar, distinct from civilians.
+    // Two guard liveries: navy "patrol" (perimeter) vs teal "checker" (ticket
+    // gate), a shared cap, and a warm lantern glow for the gates. Guards are SOLID
+    // (a collision circle) so the player can't walk through them.
     const capGeo = new THREE.CylinderGeometry(0.27, 0.3, 0.2, 12); ownedGeoms.push(capGeo);
-    const capMat = new THREE.MeshStandardMaterial({ color: hsl(210, 0.16, 0.24), roughness: 0.85 }); localMats.push(capMat);
+    const capPatrol = new THREE.MeshStandardMaterial({ color: hsl(212, 0.22, 0.18), roughness: 0.85 });
+    const capChecker = new THREE.MeshStandardMaterial({ color: hsl(168, 0.5, 0.2), roughness: 0.7, metalness: 0.15 });
+    const lanternMat = new THREE.MeshStandardMaterial({ color: hsl(42, 0.7, 0.5), emissive: hsl(42, 0.9, 0.45), emissiveIntensity: 0.9, roughness: 0.5 });
+    localMats.push(capPatrol, capChecker, lanternMat);
     const faceOut = (a) => Math.atan2(Math.cos(a), Math.sin(a));   // look radially outward
-    const placeGuard = (x, z, ry) => {
-      const c = buildAvatar({ hue: 210, style: 'minimal' });
+    const placeGuard = (x, z, ry, checker) => {
+      const c = buildAvatar({ hue: checker ? 168 : 212, style: 'minimal' });
       c.group.position.set(x, 0, z);
       c.group.rotation.y = ry != null ? ry : 0;
       if (c.setStyle) c.setStyle('minimal');
       if (c.mats) {
-        if (c.mats.clothMat) c.mats.clothMat.color = hsl(210, 0.12, 0.34);
-        if (c.mats.pantsMat) c.mats.pantsMat.color = hsl(210, 0.08, 0.2);
+        if (c.mats.clothMat) c.mats.clothMat.color = checker ? hsl(168, 0.5, 0.42) : hsl(212, 0.2, 0.34);
+        if (c.mats.pantsMat) c.mats.pantsMat.color = checker ? hsl(168, 0.32, 0.22) : hsl(212, 0.1, 0.2);
       }
-      const cap = new THREE.Mesh(capGeo, capMat); cap.position.y = 1.86; c.group.add(cap);
+      const cap = new THREE.Mesh(capGeo, checker ? capChecker : capPatrol); cap.position.y = 1.86; c.group.add(cap);
       scene.add(c.group);
+      circles.push({ x, z, r: 0.45 });   // solid — no walking through a guard
     };
 
     // ── the four cardinal gates: pillars + lintel + label banner + NPCs ──
@@ -1101,19 +1118,30 @@ export function createVeyraWorld(container, opts) {
       fenceGates.push({ key: g.key, label: g.label, a: g.a, x: cxg, z: czg, hue: g.hue });
       const tan = g.a + Math.PI / 2, tx = Math.cos(tan), tz = Math.sin(tan);
       const halfGapM = GAP_HALF * FENCE_R;
+      // Stone pillars (base + shaft + capital), a timber lintel, a terracotta roof
+      // canopy, glowing lanterns + the name banner — a proper Hanoi-style gateway.
       for (const sgn of [-1, 1]) {
         const px = cxg + tx * sgn * halfGapM, pz = czg + tz * sgn * halfGapM;
-        const pillar = new THREE.Mesh(new THREE.BoxGeometry(0.7, 4.2, 0.7), pillarMat);
-        pillar.position.set(px, 2.1, pz); pillar.castShadow = true; pillar.receiveShadow = true; scene.add(pillar);
-        ownedGeoms.push(pillar.geometry); circles.push({ x: px, z: pz, r: 0.7 });
+        const base = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.7, 1.1), mossStone);
+        base.position.set(px, 0.35, pz); base.castShadow = true; base.receiveShadow = true; scene.add(base); ownedGeoms.push(base.geometry);
+        const shaft = new THREE.Mesh(new THREE.BoxGeometry(0.74, 4.4, 0.74), mossStone);
+        shaft.position.set(px, 2.7, pz); shaft.castShadow = true; shaft.receiveShadow = true; scene.add(shaft); ownedGeoms.push(shaft.geometry);
+        const capit = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.42, 1.0), mossStone);
+        capit.position.set(px, 5.05, pz); capit.castShadow = true; scene.add(capit); ownedGeoms.push(capit.geometry);
+        circles.push({ x: px, z: pz, r: 0.7 });
+        const lant = new THREE.Mesh(new THREE.SphereGeometry(0.2, 10, 10), lanternMat);
+        lant.position.set(px - tx * sgn * 0.55, 3.7, pz - tz * sgn * 0.55); scene.add(lant); ownedGeoms.push(lant.geometry);
       }
-      const lintel = new THREE.Mesh(new THREE.BoxGeometry(halfGapM * 2 + 0.7, 0.7, 0.5), pillarMat);
-      lintel.position.set(cxg, 4.4, czg); lintel.rotation.y = -tan; lintel.castShadow = true; scene.add(lintel);
-      ownedGeoms.push(lintel.geometry);
+      const beam = new THREE.Mesh(new THREE.BoxGeometry(halfGapM * 2 + 1.3, 0.62, 0.72), darkWood);
+      beam.position.set(cxg, 5.0, czg); beam.rotation.y = -tan; beam.castShadow = true; scene.add(beam); ownedGeoms.push(beam.geometry);
+      const roof = new THREE.Mesh(new THREE.BoxGeometry(halfGapM * 2 + 3.0, 0.3, 2.0), roofTile);
+      roof.position.set(cxg, 5.5, czg); roof.rotation.y = -tan; roof.castShadow = true; scene.add(roof); ownedGeoms.push(roof.geometry);
+      const ridge = new THREE.Mesh(new THREE.BoxGeometry(halfGapM * 2 + 3.2, 0.24, 0.5), roofTile);
+      ridge.position.set(cxg, 5.74, czg); ridge.rotation.y = -tan; scene.add(ridge); ownedGeoms.push(ridge.geometry);
       const bannerMat = new THREE.MeshBasicMaterial({ map: makeLabelTexture(g.label, g.hue), side: THREE.DoubleSide });
       localMats.push(bannerMat);
-      const banner = new THREE.Mesh(new THREE.PlaneGeometry(6, 2.2), bannerMat);
-      banner.position.set(cxg, 3.4, czg); banner.rotation.y = Math.PI / 2 - g.a;
+      const banner = new THREE.Mesh(new THREE.PlaneGeometry(6.2, 2.0), bannerMat);
+      banner.position.set(cxg, 4.05, czg); banner.rotation.y = Math.PI / 2 - g.a;
       scene.add(banner); ownedGeoms.push(banner.geometry);
       const rec = fenceGates[fenceGates.length - 1];
       // Closed barrier across the gap (only for guests). Hidden + its collision
@@ -1135,7 +1163,7 @@ export function createVeyraWorld(container, opts) {
       const out = faceOut(g.a);
       for (const sgn of [-1, 1]) {
         placeGuard(cxg + Math.cos(g.a) * 4 + tx * sgn * (halfGapM - 2),
-                   czg + Math.sin(g.a) * 4 + tz * sgn * (halfGapM - 2), out);
+                   czg + Math.sin(g.a) * 4 + tz * sgn * (halfGapM - 2), out, true);
       }
       const perGate = q.tier === 'low' ? 0 : 1;
       for (let k = 0; k < perGate; k++) {
@@ -1148,7 +1176,7 @@ export function createVeyraWorld(container, opts) {
     // WHOLE fence. Instanced (simplified body/head/cap) so hundreds of guards cost
     // only a few draw calls. Skips the gate gaps (those have detailed guards).
     (function perimeterGuards() {
-      const spacing = q.tier === 'low' ? 14 : q.tier === 'mid' ? 9 : 6;
+      const spacing = q.tier === 'low' ? 12 : q.tier === 'mid' ? 7 : 4;
       const ringR = FENCE_R + 2.4;
       const slots = [];
       const gn = Math.max(8, Math.round((2 * Math.PI * ringR) / spacing));
@@ -1177,10 +1205,12 @@ export function createVeyraWorld(container, opts) {
         pos.set(Math.cos(a) * ringR, 0, Math.sin(a) * ringR);
         m.compose(pos, qq, scl);
         body.setMatrixAt(i, m); head.setMatrixAt(i, m); capI.setMatrixAt(i, m);
+        circles.push({ x: pos.x, z: pos.z, r: 0.45 });   // solid perimeter guards
       }
       for (const im of [body, head, capI]) {
         im.instanceMatrix.needsUpdate = true;
         im.matrixAutoUpdate = false; im.updateMatrix();
+        im.frustumCulled = false;   // instances ring the whole map — don't cull the set as one
         scene.add(im); ownedInstanced.push(im);
       }
     })();
