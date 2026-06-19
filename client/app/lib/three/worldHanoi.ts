@@ -1087,9 +1087,15 @@ export function createVeyraWorld(container, opts) {
     // Spawn on a road by the lake's north shore, facing the lake/Turtle Tower.
     player = buildAvatar({ hue: playerHue, style: opts.playerStyle });
     if (entered) {
-      // Signed in: spawn on a road by the lake's north shore, facing the lake.
-      const spawnRoad = findNorthShoreSpawn(roadList, lakeCx, lakeNorthZ);
-      SPAWN = new THREE.Vector3(spawnRoad.x, 0, spawnRoad.z);
+      // Signed in: restore the last saved world position if we have one; otherwise
+      // spawn on a road by the lake's north shore. Either way, face the lake.
+      const sp = opts.startPos;
+      if (sp && isFinite(sp.x) && isFinite(sp.z)) {
+        SPAWN = new THREE.Vector3(sp.x, 0, sp.z);
+      } else {
+        const spawnRoad = findNorthShoreSpawn(roadList, lakeCx, lakeNorthZ);
+        SPAWN = new THREE.Vector3(spawnRoad.x, 0, spawnRoad.z);
+      }
       spawnYaw = Math.atan2(lakeCx - SPAWN.x, lakeCz - SPAWN.z); // face lake centre
     } else {
       // Guest: stand just OUTSIDE the North gate, facing in toward the city.
@@ -2187,7 +2193,7 @@ export function createVeyraWorld(container, opts) {
   // Hoisted scratch for the per-frame bird flock (no per-frame allocation).
   const _birdPos = new THREE.Vector3(), _birdFwd = new THREE.Vector3(), _birdQuat = new THREE.Quaternion();
   const _birdMat = new THREE.Matrix4(), _birdScl = new THREE.Vector3(1, 1, 1), _birdZ = new THREE.Vector3(0, 0, 1);
-  let phase = 0, near = null, last = performance.now(), miniAccum = 0;
+  let phase = 0, near = null, last = performance.now(), miniAccum = 0, posAccum = 0;
 
   function step(now) {
     if (!running) return;
@@ -2219,9 +2225,13 @@ export function createVeyraWorld(container, opts) {
     // until they're past the fence.
     let mvx = 0, mvz = 0;
     if (autoEnter && !entered) {
-      const tgX = Math.cos(autoEnter.a) * (fenceR - 14), tgZ = Math.sin(autoEnter.a) * (fenceR - 14);
-      const dx = tgX - pp.x, dz = tgZ - pp.z, dl = Math.hypot(dx, dz) || 1;
-      mvx = dx / dl; mvz = dz / dl; moving = true;
+      autoEnter.t = (autoEnter.t || 0) + dt;
+      if (autoEnter.t > 5) { entered = true; autoEnter = null; }   // safety: never auto-walk forever
+      else {
+        const tgX = Math.cos(autoEnter.a) * (fenceR - 14), tgZ = Math.sin(autoEnter.a) * (fenceR - 14);
+        const dx = tgX - pp.x, dz = tgZ - pp.z, dl = Math.hypot(dx, dz) || 1;
+        mvx = dx / dl; mvz = dz / dl; moving = true;
+      }
     } else if (moving) {
       const fwdX = -Math.sin(camYaw), fwdZ = -Math.cos(camYaw);
       const rgtX = Math.cos(camYaw), rgtZ = -Math.sin(camYaw);
@@ -2538,6 +2548,11 @@ export function createVeyraWorld(container, opts) {
 
     miniAccum += dt;
     if (miniAccum > 0.12) { drawMinimap(); miniAccum = 0; }
+
+    // Persist the world position (only once inside the city) so a reload resumes
+    // where the player was standing instead of respawning at the gate/shore.
+    posAccum += dt;
+    if (entered && posAccum > 1.2) { posAccum = 0; opts.onPos && opts.onPos({ x: pp.x, z: pp.z }); }
 
     environment.update(dt, camPos);
     post.render(dt);

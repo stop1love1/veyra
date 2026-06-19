@@ -1,23 +1,25 @@
 // @ts-nocheck -- shared input controls (keyboard + virtual joystick) for the engines.
 
 const MOVE_KEYS = ['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'];
+const ACTION_KEYS = ['shift', ' '];   // shift = run, space = jump
 
-/** WASD / arrow-key movement state. Returns { keys, dispose }. */
+/** WASD / arrow-key movement (+ shift run / space jump). Returns { keys, dispose }. */
 export function createKeyboard() {
   const keys = {};
   const onKey = (e, down) => {
+    if (e.key == null) return;   // some events (autofill / IME / media keys) have no .key
     const k = e.key.toLowerCase();
-    if (!MOVE_KEYS.includes(k)) return;
-    // On key-DOWN, ignore movement while typing in a form field (e.g. the gate
-    // ticket's email/password) so WASD isn't swallowed. But ALWAYS process
+    if (!MOVE_KEYS.includes(k) && !ACTION_KEYS.includes(k)) return;
+    // On key-DOWN, ignore game keys while typing in a form field (e.g. the gate
+    // ticket's email/password) so they aren't swallowed. But ALWAYS process
     // key-UP — otherwise a key pressed before focusing an input never clears and
-    // the avatar walks on its own.
+    // the avatar walks/runs on its own.
     if (down) {
       const tgt = e.target;
       if (tgt && (tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA' || tgt.isContentEditable)) return;
     }
     keys[k] = down;
-    e.preventDefault();
+    if (MOVE_KEYS.includes(k) || k === ' ') e.preventDefault();   // stop page scroll on arrows/space
   };
   const kd = (e) => onKey(e, true);
   const ku = (e) => onKey(e, false);

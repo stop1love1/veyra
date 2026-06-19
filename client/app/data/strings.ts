@@ -128,6 +128,10 @@ export const STR: Record<string, Localized> = {
   ticketInvalid:  { vi: 'Vé không hợp lệ — thử lại.', en: 'Invalid ticket — try again.' },
   ticketValid:    { vi: 'Vé hợp lệ! Mời vào.',      en: 'Ticket valid! Come in.' },
   gate:           { vi: 'Cổng',                      en: 'Gate' },
+  username:       { vi: 'Tên đăng nhập',            en: 'Username' },
+  roleSecurity:   { vi: 'Bảo an',                   en: 'Security' },
+  roleChecker:    { vi: 'Soát vé',                  en: 'Ticket check' },
+  npcVisitor:     { vi: 'Khách',                     en: 'Visitor' },
 
   // ── Avatar style options (shared by CreateScreen + GuardDialogue) ──
   styleMinimal:   { vi: 'Tối giản',                en: 'Minimal' },

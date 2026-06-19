@@ -28,3 +28,6 @@ client/public/**/*.zip
 
 # OS / editor
 .DS_Store
+
+# Local MongoDB dev data (never commit DB files)
+server/.mongo-data/

@@ -58,20 +58,19 @@ export function GateTicket({ g, onValid, gate }: { g: Game; onValid: () => void;
           </div>
         </div>
 
+        <label className="v-ticket-field">
+          <span className="v-ticket-label">{t('email')}</span>
+          <input className="v-input" type="email" autoComplete="email" value={email} autoFocus
+                 onChange={(e) => setEmail(e.target.value)} />
+        </label>
+
         {tab === 'register' && (
           <label className="v-ticket-field">
-            <span className="v-ticket-label">{t('yourName')}</span>
-            <input className="v-input" value={name} maxLength={24} autoFocus
+            <span className="v-ticket-label">{t('username')}</span>
+            <input className="v-input" value={name} maxLength={24}
                    onChange={(e) => setName(e.target.value)} />
           </label>
         )}
-
-        <label className="v-ticket-field">
-          <span className="v-ticket-label">{t('email')}</span>
-          <input className="v-input" type="email" autoComplete="email" value={email}
-                 autoFocus={tab === 'login'}
-                 onChange={(e) => setEmail(e.target.value)} />
-        </label>
 
         <label className="v-ticket-field">
           <span className="v-ticket-label">{t('password')}</span>

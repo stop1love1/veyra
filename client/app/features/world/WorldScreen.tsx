@@ -54,12 +54,30 @@ function World3D({ g }: { g: Game }) {
     dispose: () => void;
     setLang?: (names: Record<string, string>) => void;
     openGate?: (key: string) => void;
+    setPlayerName?: (name: string) => void;
   } | null>(null);
   const [near, setNear] = React.useState<Proximity | null>(null);
   const [gateNear, setGateNear] = React.useState<GateNear | null>(null);
   const [ready, setReady] = React.useState(false);
   const [weather, setWeather] = React.useState<Weather | null>(null);
   const authed = !!g.auth.user;
+  // A not-signed-in visitor gets a stable temporary session id (user_XXXXXXXXX),
+  // shown above their head until they register/sign in.
+  const guestName = React.useState(() => {
+    try {
+      let id = localStorage.getItem('veyra_guest_id');
+      if (!id) { id = 'user_' + Date.now(); localStorage.setItem('veyra_guest_id', id); }
+      return id;
+    } catch { return 'user_' + Date.now(); }
+  })[0];
+  // Last saved world position — restored on reload once signed in.
+  const startPos = React.useState(() => {
+    try {
+      const raw = localStorage.getItem('veyra_world_pos');
+      const p = raw ? JSON.parse(raw) : null;
+      return (p && typeof p.x === 'number' && typeof p.z === 'number') ? p : null;
+    } catch { return null; }
+  })[0];
 
   React.useEffect(() => {
     let cancelled = false;
@@ -70,6 +88,13 @@ function World3D({ g }: { g: Game }) {
       shops,
       // Whether the player starts INSIDE the fence (signed in) or outside (guest).
       authed: !!g.auth.user,
+      // Username floated above the player's head (empty for guests → no tag).
+      playerName: g.auth.user ? (g.auth.user.name || g.auth.user.email) : guestName,
+      // Localized NPC name-tag labels.
+      labels: { security: g.t('roleSecurity'), checker: g.t('roleChecker'), visitor: g.t('npcVisitor') },
+      // Resume at the saved position (used only when signed in); persist on move.
+      startPos,
+      onPos: (p: { x: number; z: number }) => { try { localStorage.setItem('veyra_world_pos', JSON.stringify(p)); } catch { /* ignore */ } },
       onProximity: (s: Proximity | null) => setNear(s),
       // Guest reached a perimeter gate guard → present the ticket (or cleared it).
       onGate: (gate: GateNear | null) => setGateNear(gate),
@@ -88,6 +113,11 @@ function World3D({ g }: { g: Game }) {
     for (const s of VEYRA.SHOPS) names[s.id] = VEYRA.tx(s.name, g.lang);
     worldApi.current.setLang(names);
   }, [g.lang]);
+
+  // Keep the floating username in sync once the player signs in at a gate.
+  React.useEffect(() => {
+    worldApi.current?.setPlayerName?.(g.auth.user ? (g.auth.user.name || g.auth.user.email) : guestName);
+  }, [g.auth.user, guestName]);
 
   let prompt: EnterPrompt | null = null;
   if (near) {
