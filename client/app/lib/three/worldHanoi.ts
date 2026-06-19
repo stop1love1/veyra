@@ -124,10 +124,15 @@ export function createVeyraWorld(container, opts) {
   // ── External CC0 assets (textures + GLB), all with procedural fallbacks ──
   const texer = createTextureLoader({ anisotropy: q.anisotropy });
   const kit = createKitLoader();
+  // CC0 Kenney Nature Kit trees (green broadleaf + a palm); fewer varieties on low.
+  const TREE_GLBS = q.tier === 'low'
+    ? ['/models/nature/tree_default.glb', '/models/nature/tree_oak.glb', '/models/nature/tree_tall.glb']
+    : ['/models/nature/tree_default.glb', '/models/nature/tree_detailed.glb', '/models/nature/tree_oak.glb',
+       '/models/nature/tree_fat.glb', '/models/nature/tree_tall.glb', '/models/nature/tree_palmTall.glb'];
   // Kick GLB preloads off immediately (resolved before build() places them).
-  const kitReady = q.tier === 'low'
-    ? Promise.resolve()
-    : kit.preloadUrls(['build:detail-awning', 'build:detail-parasol-a']);
+  const kitReady = kit.preloadUrls(
+    q.tier === 'low' ? TREE_GLBS : [...TREE_GLBS, 'build:detail-awning', 'build:detail-parasol-a'],
+  );
 
   // Configure façade material tiling ONCE: walls are UV-mapped in METRES, so each
   // map repeats every (tileWidth × tileHeight) metres. DoubleSide because the walls
@@ -267,6 +272,103 @@ export function createVeyraWorld(container, opts) {
       .replace('getNoise( worldPosition.xz * size )', 'getNoise( worldPosition.xz * size + uWindShift )');
     w.material.needsUpdate = true;
     return w;
+  }
+
+  // Attach the wind-sway vertex shader to a foliage material (GLB or procedural).
+  // weight = local vertex height; displacement is in LOCAL space so it scales with
+  // the per-instance tree size. Shared swayUniforms are driven each frame.
+  function attachSway(mat) {
+    mat.onBeforeCompile = (shader) => {
+      shader.uniforms.uTime = swayUniforms.uTime;
+      shader.uniforms.uWind = swayUniforms.uWind;
+      shader.uniforms.uWindDir = swayUniforms.uWindDir;
+      shader.vertexShader = 'uniform float uTime;\nuniform float uWind;\nuniform float uWindDir;\n' + shader.vertexShader;
+      shader.vertexShader = shader.vertexShader.replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+         float swayPhase = instanceMatrix[3].x * 0.15 + instanceMatrix[3].z * 0.15;
+         float swayAmt = sin(uTime * 1.6 + swayPhase) * (0.03 + uWind * 0.12) * max(position.y, 0.0);
+         transformed.x += cos(uWindDir) * swayAmt;
+         transformed.z += sin(uWindDir) * swayAmt;`,
+      );
+    };
+    mat.needsUpdate = true;
+  }
+
+  // Build the ~800 OSM trees from instanced Kenney GLB varieties (one InstancedMesh
+  // per variety per primitive → a handful of draw calls). Returns false to fall back
+  // to the procedural trees. `treeUrls` are already-preloaded GLB URLs.
+  function buildGltfTrees(treeList, treeUrls, castShadows) {
+    const varieties = [];
+    for (const url of treeUrls) {
+      const root = kit.getByUrl(url);
+      root.updateMatrixWorld(true);
+      const prims = [];
+      root.traverse((o) => {
+        if (o.isMesh && o.geometry) {
+          // Bake the node's transform into a cloned geometry (instancing ignores the
+          // node hierarchy), so each primitive sits correctly with its base at y≈0.
+          const geo = o.geometry.clone();
+          geo.applyMatrix4(o.matrixWorld);
+          geo.computeBoundingBox();
+          prims.push({ geo, mat: o.material });
+        }
+      });
+      if (!prims.length) continue;
+      let maxY = 0;
+      for (const p of prims) maxY = Math.max(maxY, p.geo.boundingBox.max.y);
+      varieties.push({ prims, h: maxY || 1 });
+    }
+    if (!varieties.length) return false;
+
+    // Wind sway on each variety's foliage material (name ~ leaf/green); ensure matte.
+    const swayed = new Set();
+    for (const v of varieties) for (const p of v.prims) {
+      if (!p.mat) continue;
+      const nm = (p.mat.name || '').toLowerCase();
+      if ((nm.includes('leaf') || nm.includes('green')) && !swayed.has(p.mat)) { attachSway(p.mat); swayed.add(p.mat); }
+      p.mat.metalness = 0;
+    }
+
+    // Assign each tree to a variety (seeded by position); count per variety.
+    const assign = new Array(treeList.length);
+    const counts = new Array(varieties.length).fill(0);
+    for (let i = 0; i < treeList.length; i++) {
+      const vi = Math.floor(hash01(treeList[i][0] * 3.1 + 7, treeList[i][1] * 1.7 - 3) * varieties.length) % varieties.length;
+      assign[i] = vi; counts[vi]++;
+    }
+    // Create the instanced meshes.
+    for (let vi = 0; vi < varieties.length; vi++) {
+      const v = varieties[vi];
+      v.insts = v.prims.map((p) => {
+        const im = new THREE.InstancedMesh(p.geo, p.mat, counts[vi]);
+        im.castShadow = castShadows; im.receiveShadow = false; im.frustumCulled = false;
+        ownedGeoms.push(p.geo);   // we own the baked clones
+        return im;
+      });
+    }
+    // Fill per-instance transforms (scale to a realistic 3.5–7 m height, random yaw).
+    const m = new THREE.Matrix4(), qrot = new THREE.Quaternion(), pos = new THREE.Vector3(), scl = new THREE.Vector3();
+    const up = new THREE.Vector3(0, 1, 0);
+    const vIdx = new Array(varieties.length).fill(0);
+    for (let i = 0; i < treeList.length; i++) {
+      const tx = treeList[i][0], tz = treeList[i][1];
+      circles.push({ x: tx, z: tz, r: 0.5 });   // trunk collision
+      const v = varieties[assign[i]];
+      const r1 = hash01(tx + 1.7, tz - 2.3), r3 = hash01(tx * 2.1 + 5, tz);
+      const s = (3.5 + r1 * 3.5) / v.h;
+      qrot.setFromAxisAngle(up, r3 * Math.PI * 2);
+      pos.set(tx, 0, tz); scl.set(s, s, s);
+      m.compose(pos, qrot, scl);
+      const li = vIdx[assign[i]]++;
+      for (const im of v.insts) im.setMatrixAt(li, m);
+    }
+    for (const v of varieties) for (const im of v.insts) {
+      im.instanceMatrix.needsUpdate = true;
+      im.matrixAutoUpdate = false; im.updateMatrix();
+      scene.add(im); ownedInstanced.push(im);
+    }
+    return true;
   }
 
   // ── Runtime state shared between the async build and the API/loop ─────────
@@ -846,6 +948,10 @@ export function createVeyraWorld(container, opts) {
         .map((e) => e.t);
     }
     if (treeList.length) {
+     const castShadowsT = q.tier === 'high';
+     const readyTreeUrls = TREE_GLBS.filter((u) => kit.hasUrl(u));
+     const builtGlbTrees = readyTreeUrls.length ? buildGltfTrees(treeList, readyTreeUrls, castShadowsT) : false;
+     if (!builtGlbTrees) {
       const trunkGeo = new THREE.CylinderGeometry(0.16, 0.26, 1, 6).translate(0, 0.5, 0); // unit-height, base at 0
       const foliageGeo = new THREE.IcosahedronGeometry(1, 1);
       ownedGeoms.push(trunkGeo, foliageGeo);
@@ -905,6 +1011,7 @@ export function createVeyraWorld(container, opts) {
       foliage.matrixAutoUpdate = false; foliage.updateMatrix();
       scene.add(trunks); scene.add(foliage);
       ownedInstanced.push(trunks, foliage);
+     }
     }
 
     // ──────────────────────── LANDMARKS at the lake ──────────────────────
