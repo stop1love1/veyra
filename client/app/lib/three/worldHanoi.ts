@@ -256,6 +256,16 @@ export function createVeyraWorld(container, opts) {
     w.material.polygonOffsetFactor = -2;
     w.material.polygonOffsetUnits = -2;
     w.renderOrder = 1;
+
+    // Wind-DIRECTION drift: Water's built-in noise scroll is fixed-direction. Inject a
+    // uWindShift uniform and offset the noise sampling coordinate by it, so the whole
+    // ripple field visibly flows downwind. The shift is accumulated each frame from the
+    // real wind direction (windDir) in the render loop.
+    w.material.uniforms.uWindShift = { value: waterWindShift };
+    w.material.fragmentShader = w.material.fragmentShader
+      .replace('uniform float size;', 'uniform float size;\n\t\t\t\tuniform vec2 uWindShift;')
+      .replace('getNoise( worldPosition.xz * size )', 'getNoise( worldPosition.xz * size + uWindShift )');
+    w.material.needsUpdate = true;
     return w;
   }
 
@@ -275,7 +285,8 @@ export function createVeyraWorld(container, opts) {
   // ── Lake (Three.js Water) + wind + GLB/anim state ─────────
   let water = null;            // reflective animated lake
   let waterNormals = null;     // normal texture (real or procedural fallback)
-  let windDir = 0;             // radians; ripple scroll direction (from weather)
+  let windDir = 0;             // radians; ripple drift direction (from weather)
+  const waterWindShift = new THREE.Vector2(0, 0); // accumulated downwind drift of the ripples
   let birdMesh = null;         // instanced bird flock (built in build())
   const birdParams = [];       // per-bird orbit params
   // Tree foliage wind-sway uniforms (bound in build() onBeforeCompile).
@@ -288,6 +299,8 @@ export function createVeyraWorld(container, opts) {
   let entered = !!opts.authed;                 // inside the fence? guests start outside
   const openGates = Object.create(null);       // gate key -> true once the ticket is accepted
   let nearGate = null;                         // gate the guest is standing at (or null)
+  let autoEnter = null;                        // { a } — after a ticket clears, auto-walk the player IN
+  let nameTag = null;                          // floating username sprite above the player
 
   // ─────────────────────────────────────────────────────────────────────────
   //  BUILD — runs after the data fetch resolves (or after a fallback on error).
@@ -982,6 +995,7 @@ export function createVeyraWorld(container, opts) {
     blob = new THREE.Mesh(new THREE.CircleGeometry(0.5, 20),
       new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.26 }));
     blob.rotation.x = -Math.PI / 2; blob.position.y = 0.05; scene.add(blob);
+    setNameTag(opts.playerName || '');   // float the username above the player (if signed in)
 
     // ── PERIMETER FENCE + four cardinal ticket gates (Đông/Tây/Nam/Bắc) + NPCs.
     //    Rings the playable core just beyond the clamp radius, broken by four
@@ -1019,6 +1033,35 @@ export function createVeyraWorld(container, opts) {
     ownedTextures.push(tex);
     return tex;
   }
+  // A floating name-tag sprite (always faces the camera) — the player's username
+  // and the named NPCs. Texture + material are tracked for disposal.
+  function makeTag(text, accent) {
+    const cv = document.createElement('canvas'); cv.width = 256; cv.height = 64;
+    const cx = cv.getContext('2d');
+    cx.fillStyle = 'rgba(8,22,24,0.82)'; cx.fillRect(6, 16, 244, 38);
+    cx.fillStyle = accent || 'rgba(21,214,180,0.95)'; cx.fillRect(6, 16, 244, 3);
+    cx.fillStyle = '#eafcf8'; cx.font = 'bold 28px system-ui, sans-serif'; cx.textAlign = 'center'; cx.textBaseline = 'middle';
+    const s = String(text == null ? '' : text);
+    cx.fillText(s.length > 18 ? s.slice(0, 17) + '…' : s, 128, 37);
+    const tex = new THREE.CanvasTexture(cv);
+    tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = q.anisotropy || 1;
+    ownedTextures.push(tex);
+    const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false });
+    localMats.push(mat);
+    const spr = new THREE.Sprite(mat); spr.scale.set(2.4, 0.6, 1);
+    return spr;
+  }
+  // The player's username tag (recreated on sign-in, cleared on sign-out).
+  function setNameTag(name) {
+    if (!player) return;
+    if (nameTag) { player.group.remove(nameTag); nameTag = null; }
+    if (!name) return;
+    nameTag = makeTag(name, 'rgba(21,214,180,0.97)');
+    nameTag.scale.set(2.9, 0.72, 1);
+    nameTag.position.set(0, 2.25, 0);
+    nameTag.material.depthTest = false; nameTag.renderOrder = 12;
+    player.group.add(nameTag);
+  }
   function buildFenceAndGates() {
     const gated = !opts.authed;               // guests face closed gates until a ticket clears
     const FENCE_R = MAXR + 4;                 // just beyond the player's clamp radius
@@ -1033,12 +1076,14 @@ export function createVeyraWorld(container, opts) {
     const angDiff = (a, b) => Math.abs(((a - b + Math.PI) % (Math.PI * 2)) - Math.PI);
     const inGap = (a) => GATES.some((g) => angDiff(a, g.a) < GAP_HALF);
     const STYLES = ['minimal', 'street', 'soft'];
+    const LABELS = opts.labels || { security: 'Bảo an', checker: 'Soát vé', visitor: 'Khách' };
     const placeNPC = (x, z, hue, style, ry) => {
       const c = buildAvatar({ hue, style });
       c.group.position.set(x, 0, z);
       c.group.rotation.y = ry != null ? ry : 0;
       c.group.scale.setScalar(0.98);
       if (c.setStyle) c.setStyle(style);
+      const tag = makeTag(LABELS.visitor, 'rgba(180,200,210,0.9)'); tag.position.set(0, 2.15, 0); c.group.add(tag);
       scene.add(c.group);
     };
 
@@ -1108,6 +1153,8 @@ export function createVeyraWorld(container, opts) {
         if (c.mats.pantsMat) c.mats.pantsMat.color = checker ? hsl(168, 0.32, 0.22) : hsl(212, 0.1, 0.2);
       }
       const cap = new THREE.Mesh(capGeo, checker ? capChecker : capPatrol); cap.position.y = 1.86; c.group.add(cap);
+      const tag = makeTag(checker ? LABELS.checker : LABELS.security, checker ? 'rgba(21,214,180,0.95)' : 'rgba(90,150,230,0.92)');
+      tag.position.set(0, 2.15, 0); c.group.add(tag);
       scene.add(c.group);
       circles.push({ x, z, r: 0.45 });   // solid — no walking through a guard
     };
@@ -1199,6 +1246,7 @@ export function createVeyraWorld(container, opts) {
       const capI = new THREE.InstancedMesh(capG, capM, N);
       const m = new THREE.Matrix4(), qq = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0),
             pos = new THREE.Vector3(), scl = new THREE.Vector3(1, 1, 1);
+      const labelEvery = Math.max(1, Math.round(N / (q.tier === 'low' ? 12 : q.tier === 'mid' ? 26 : 46)));
       for (let i = 0; i < N; i++) {
         const a = slots[i];
         qq.setFromAxisAngle(up, faceOut(a));
@@ -1206,6 +1254,11 @@ export function createVeyraWorld(container, opts) {
         m.compose(pos, qq, scl);
         body.setMatrixAt(i, m); head.setMatrixAt(i, m); capI.setMatrixAt(i, m);
         circles.push({ x: pos.x, z: pos.z, r: 0.45 });   // solid perimeter guards
+        // Sparse "Bảo an" tags so the patrol reads as named without 100s of sprites.
+        if (i % labelEvery === 0) {
+          const tag = makeTag(LABELS.security, 'rgba(90,150,230,0.92)');
+          tag.position.set(pos.x, 2.05, pos.z); scene.add(tag);
+        }
       }
       for (const im of [body, head, capI]) {
         im.instanceMatrix.needsUpdate = true;
@@ -1979,15 +2032,25 @@ export function createVeyraWorld(container, opts) {
     if (keys['d'] || keys['arrowright']) ix += 1;
     ix += joy.x; iz += joy.y;
     let mag = Math.hypot(ix, iz);
-    const moving = mag > 0.08;
+    let moving = mag > 0.08;
     if (mag > 1) { ix /= mag; iz /= mag; mag = 1; }
 
     const pp = player.group.position;
-    if (moving) {
+    // After a ticket is accepted the guard opens the gate and the player walks IN
+    // automatically — steer toward a point just inside the gate, overriding input
+    // until they're past the fence.
+    let mvx = 0, mvz = 0;
+    if (autoEnter && !entered) {
+      const tgX = Math.cos(autoEnter.a) * (fenceR - 14), tgZ = Math.sin(autoEnter.a) * (fenceR - 14);
+      const dx = tgX - pp.x, dz = tgZ - pp.z, dl = Math.hypot(dx, dz) || 1;
+      mvx = dx / dl; mvz = dz / dl; moving = true;
+    } else if (moving) {
       const fwdX = -Math.sin(camYaw), fwdZ = -Math.cos(camYaw);
       const rgtX = Math.cos(camYaw), rgtZ = -Math.sin(camYaw);
-      const mvx = rgtX * ix + fwdX * (-iz);
-      const mvz = rgtZ * ix + fwdZ * (-iz);
+      mvx = rgtX * ix + fwdX * (-iz);
+      mvz = rgtZ * ix + fwdZ * (-iz);
+    }
+    if (moving) {
       pp.x += mvx * SPEED * dt; pp.z += mvz * SPEED * dt;
 
       const pr = Math.hypot(pp.x, pp.z);
@@ -2000,7 +2063,7 @@ export function createVeyraWorld(container, opts) {
         const OUTER = fenceR + 30;
         if (pr > OUTER) { const s = OUTER / pr; pp.x *= s; pp.z *= s; }
         // Walked inward through an opened gate → now inside the city for good.
-        if (pr < fenceR - 6) entered = true;
+        if (pr < fenceR - 6) { entered = true; autoEnter = null; }
       }
 
       const rad = 0.5;
@@ -2149,9 +2212,13 @@ export function createVeyraWorld(container, opts) {
     if (water) {
       const u = water.material.uniforms;
       u.time.value += dt * (0.4 + windAmt * 1.6);
-      if (u.normalSampler && u.normalSampler.value) {
-        u.normalSampler.value.offset.set(Math.cos(windDir) * u.time.value * 0.02, Math.sin(windDir) * u.time.value * 0.02);
-      }
+      // Drift the whole ripple field downwind (windDir → world XZ). Speed scales with
+      // wind; a gentle baseline keeps calm water alive. Wrapped to avoid float drift.
+      const driftSpeed = 0.5 + windAmt * 6.0;
+      waterWindShift.x += Math.sin(windDir) * driftSpeed * dt;
+      waterWindShift.y += Math.cos(windDir) * driftSpeed * dt;
+      if (Math.abs(waterWindShift.x) > 1e4) waterWindShift.x = waterWindShift.x % 1e4;
+      if (Math.abs(waterWindShift.y) > 1e4) waterWindShift.y = waterWindShift.y % 1e4;
       u.distortionScale.value = 1.2 + windAmt * 3.0;
       if (environment.sunDir) u.sunDirection.value.copy(environment.sunDir);
     }
@@ -2323,13 +2390,16 @@ export function createVeyraWorld(container, opts) {
     // Ticket accepted at gate `key`: drop its barrier so the guest can walk in.
     openGate(key) {
       openGates[key] = true;
-      for (const fg of fenceGates) if (fg.key === key && fg.bar) fg.bar.visible = false;
+      let a = null;
+      for (const fg of fenceGates) if (fg.key === key) { if (fg.bar) fg.bar.visible = false; a = fg.a; }
+      if (a != null) autoEnter = { a };   // guard opens the gate → auto-walk the player inside
     },
     recenter() {
       if (!player) return;
       player.group.position.copy(SPAWN);
       player.group.rotation.y = spawnYaw;
     },
+    setPlayerName(name) { setNameTag(name); },
     setLang(names) {
       if (!names) return;
       for (let i = 0; i < interactables.length; i++) {
