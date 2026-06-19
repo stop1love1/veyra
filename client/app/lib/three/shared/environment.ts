@@ -38,6 +38,33 @@ export function createEnvironment(renderer, scene, { quality, envHdrUrl } = {}) 
   skyU.mieDirectionalG.value = 0.8;
   scene.add(sky);
 
+  // ── Night sky: a starfield + a soft moon, faded in as daylight drops so the
+  //    night reads as a real night sky instead of an empty black void. Both are
+  //    recentred on the camera each frame (so they feel infinitely far) and their
+  //    opacity is set from the daylight factor in applyLighting(). ──
+  const STAR_N = 1400, STAR_R = 1200;
+  const starGeo = new THREE.BufferGeometry();
+  const starPos = new Float32Array(STAR_N * 3);
+  for (let i = 0; i < STAR_N; i++) {
+    const theta = Math.random() * Math.PI * 2;
+    const phi = Math.acos(Math.random() * 0.9 + 0.02);   // mostly upper hemisphere
+    starPos[i * 3] = STAR_R * Math.sin(phi) * Math.cos(theta);
+    starPos[i * 3 + 1] = STAR_R * Math.cos(phi);
+    starPos[i * 3 + 2] = STAR_R * Math.sin(phi) * Math.sin(theta);
+  }
+  starGeo.setAttribute('position', new THREE.BufferAttribute(starPos, 3));
+  const starMat = new THREE.PointsMaterial({ color: 0xfff4e0, size: 2.2, sizeAttenuation: false, transparent: true, opacity: 0, depthWrite: false, fog: false });
+  const stars = new THREE.Points(starGeo, starMat);
+  stars.renderOrder = -2; stars.matrixAutoUpdate = false;
+  scene.add(stars);
+
+  const moonGeo = new THREE.SphereGeometry(42, 20, 16);
+  const moonMat = new THREE.MeshBasicMaterial({ color: 0xf2efe0, transparent: true, opacity: 0, depthWrite: false, fog: false });
+  const moon = new THREE.Mesh(moonGeo, moonMat);
+  moon.renderOrder = -1; moon.matrixAutoUpdate = false;
+  const moonDir = new THREE.Vector3(0.35, 0.7, -0.55).normalize();   // fixed, decorative
+  scene.add(moon);
+
   // Clear-sky baseline values so weather can lerp back toward them.
   const baseSky = { turbidity: 3.0, rayleigh: 1.2 };
 
@@ -143,6 +170,10 @@ export function createEnvironment(renderer, scene, { quality, envHdrUrl } = {}) 
       * THREE.MathUtils.lerp(0.40, 1.0, curDaylight)
       * THREE.MathUtils.lerp(1.0, 0.85, overcast);
     scene.environmentIntensity = THREE.MathUtils.lerp(0.12, 1.0, curDaylight);
+    // Fade the starfield + moon in as night falls.
+    const nightOpacity = Math.pow(1 - curDaylight, 1.4);
+    starMat.opacity = nightOpacity * 0.9;
+    moonMat.opacity = nightOpacity;
   }
 
   // ── Time of day ───────────────────────────────────────────────────────────
@@ -226,6 +257,9 @@ export function createEnvironment(renderer, scene, { quality, envHdrUrl } = {}) 
 
     // Recenter the visible sky dome on the camera.
     sky.position.copy(_camPos);
+    // Recentre the night sky on the camera (feels infinitely far).
+    stars.position.copy(_camPos); stars.updateMatrix();
+    moon.position.copy(_camPos).addScaledVector(moonDir, 1000); moon.updateMatrix();
 
     // Anchor the sun relative to the camera: light sits up-sun, target is the camera.
     sun.position.copy(sunDir).multiplyScalar(120).add(_camPos);
@@ -241,6 +275,10 @@ export function createEnvironment(renderer, scene, { quality, envHdrUrl } = {}) 
     scene.fog = null;
 
     pmrem.dispose();
+
+    // Night sky.
+    scene.remove(stars); starGeo.dispose(); starMat.dispose();
+    scene.remove(moon); moonGeo.dispose(); moonMat.dispose();
 
     // Visible sky.
     scene.remove(sky);

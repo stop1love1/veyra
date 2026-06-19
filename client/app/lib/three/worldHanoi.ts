@@ -944,7 +944,9 @@ export function createVeyraWorld(container, opts) {
     // variation. NO collision (trees are thin → streets stay walkable). Shadows
     // only on the high tier (and only near the core), off on mid/low for the budget.
     let treeList = (data && data.trees) ? data.trees : [];
-    const treeCap = q.tier === 'low' ? 150 : q.tier === 'mid' ? 450 : treeList.length;
+    // Hoan Kiem reads as a tree-LINED shore, not a forest — keep the count modest
+    // (the cap keeps the trees nearest the lake, i.e. the real shoreline rows).
+    const treeCap = q.tier === 'low' ? 110 : q.tier === 'mid' ? 200 : 320;
     if (treeList.length > treeCap) {
       treeList = treeList
         .map((t) => ({ t, d: (t[0] - lakeCx) ** 2 + (t[1] - lakeCz) ** 2 }))
@@ -1861,7 +1863,7 @@ export function createVeyraWorld(container, opts) {
 
           // VIETNAMESE FLAGS (cờ đỏ sao vàng) on building façades, ~every 26 m.
           flagAcc += STEP;
-          if (flagAcc >= 26) {
+          if (flagAcc >= 46) {
             flagAcc = 0;
             const side = hash01(px + 5.1, pz + 2.2) < 0.5 ? 1 : -1;
             const fx = px + nx * (hw + 0.3) * side, fz = pz + nz * (hw + 0.3) * side;
@@ -1889,7 +1891,7 @@ export function createVeyraWorld(container, opts) {
           }
 
           // potted ornamental tree (cây cảnh / quất) on the sidewalk, occasionally.
-          if (hw >= 2 && hash01(px * 1.3 + 4.1, pz * 1.3 - 6.2) < 0.09 * dens) {
+          if (hw >= 2 && hash01(px * 1.3 + 4.1, pz * 1.3 - 6.2) < 0.05 * dens) {
             const kside = hash01(px + 2.1, pz) < 0.5 ? 1 : -1;
             const kx = px + nx * (hw + 0.4) * kside, kz = pz + nz * (hw + 0.4) * kside;
             if (!pointInBuildings(kx, kz, 0.3) && spacingOk(kx, kz, 2.0)) { kumquatP.push({ x: kx, z: kz }); spaceAdd(kx, kz); }
@@ -1908,7 +1910,7 @@ export function createVeyraWorld(container, opts) {
           }
           // red propaganda BANNER on façades, ~every 60 m (băng rôn).
           bannerAcc += STEP;
-          if (bannerAcc >= 60) {
+          if (bannerAcc >= 95) {
             bannerAcc = 0;
             const side = hash01(px - 4.4, pz + 1.9) < 0.5 ? 1 : -1;
             const bnx = px + nx * (hw + 0.25) * side, bnz = pz + nz * (hw + 0.25) * side;
