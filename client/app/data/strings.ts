@@ -117,6 +117,17 @@ export const STR: Record<string, Localized> = {
   continue:       { vi: 'Tiếp tục',                 en: 'Continue' },
   openGate:       { vi: 'Xong — mở cổng',          en: 'Done — open gate' },
 
+  // ── Gate ticket (diegetic login/register at the gate) ──
+  gateHintTicket: { vi: 'Đi tới bảo vệ và đưa vé để vào Veyra', en: 'Walk to the guard and hand over your ticket to enter Veyra' },
+  guardAskTicket: { vi: 'Cho ta xem vé của ngươi. Chưa có thì làm vé mới.', en: 'Show me your ticket. No ticket? Make a new one.' },
+  ticketTitle:    { vi: 'Vé vào cổng',              en: 'Entry ticket' },
+  ticketHolder:   { vi: 'Khách',                     en: 'Bearer' },
+  giveTicket:     { vi: 'Đưa vé cho bảo vệ',       en: 'Give ticket to guard' },
+  makeTicket:     { vi: 'Làm vé mới',               en: 'Make new ticket' },
+  ticketChecking: { vi: 'Bảo vệ đang soát vé…',    en: 'Guard is checking…' },
+  ticketInvalid:  { vi: 'Vé không hợp lệ — thử lại.', en: 'Invalid ticket — try again.' },
+  ticketValid:    { vi: 'Vé hợp lệ! Mời vào.',      en: 'Ticket valid! Come in.' },
+
   // ── Avatar style options (shared by CreateScreen + GuardDialogue) ──
   styleMinimal:   { vi: 'Tối giản',                en: 'Minimal' },
   styleStreet:    { vi: 'Đường phố',               en: 'Street' },

@@ -306,7 +306,17 @@ export function useGameState(): GameState {
     persistUser(null);
     setAuthUser(null);
     setAuthToken(null);
-  }, []);
+    // Drop the player back outside the gate and forget where they were, so the
+    // next sign-in goes through the ticket check again (App's auth wall renders
+    // the gate while authUser is null regardless).
+    histRef.current = [];
+    signalNav(screenRef.current, 'gate', 'back');
+    setScreen('gate');
+    setParams({});
+    setNpc(null);
+    setProd(null);
+    setWorldPanel(null);
+  }, [signalNav]);
 
   const refresh = React.useCallback(async () => {
     if (!readToken()) return;

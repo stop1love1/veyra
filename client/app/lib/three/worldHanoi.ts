@@ -373,7 +373,7 @@ export function createVeyraWorld(container, opts) {
           const z = p[1] + (nx[1] - p[1]) * t;
           // Leave a GAP at the bridge mouth so The Huc bridge corridor over the
           // water isn't fenced (the player can walk out to the temple island).
-          if (Math.abs(x - lakeCx) < 3.0 && z > lakeNorthZ - 3 && z < lakeNorthZ + 26) continue;
+          if (Math.abs(x - lakeCx) < 3.0 && z > lakeNorthZ - 3 && z < lakeNorthZ + 11) continue;
           const ux = x - lakeCx, uz = z - lakeCz, ul = Math.hypot(ux, uz) || 1;
           circles.push({ x: x + (ux / ul) * 0.6, z: z + (uz / ul) * 0.6, r: fr });
         }
@@ -740,6 +740,7 @@ export function createVeyraWorld(container, opts) {
       const up = new THREE.Vector3(0, 1, 0), col = new THREE.Color();
       for (let i = 0; i < treeList.length; i++) {
         const tx = treeList[i][0], tz = treeList[i][1];
+        circles.push({ x: tx, z: tz, r: 0.5 });   // trunk collision (walk under the canopy, not through)
         const r1 = hash01(tx + 1.7, tz - 2.3), r2 = hash01(tz * 1.3, tx * 0.7), r3 = hash01(tx * 2.1 + 5, tz);
         const height = 3.5 + r1 * 3.5;                 // ~3.5..7 m
         const trunkH = height * 0.45;
@@ -870,9 +871,9 @@ export function createVeyraWorld(container, opts) {
     // in the water; the bridge connects it to the north shore.
     const islandZ = northZ + 16;          // inside the lake from the north edge
     const islandR = 9;
-    const bridgeStartZ = northZ - 1.5;    // north shore (promenade) end
-    const bridgeEndZ = islandZ + islandR - 1.5;
-    const bridgeLen = Math.max(6, bridgeStartZ - bridgeEndZ); // north→south span (positive)
+    const bridgeStartZ = northZ - 1.0;          // north shore (promenade) end, LOW z
+    const bridgeEndZ = islandZ - islandR + 1.5; // lands on the island's north edge, HIGH z
+    const bridgeLen = Math.max(6, bridgeEndZ - bridgeStartZ); // +z span (shore → island, positive)
 
     // ── The Huc bridge ──
     (function theHucBridge() {
@@ -882,7 +883,7 @@ export function createVeyraWorld(container, opts) {
       bridgeInfo = { ox, startZ: bridgeStartZ, endZ: bridgeEndZ, len: bridgeLen, archRise, halfW: deckW / 2 };
       for (let i = 0; i < segs; i++) {
         const t0 = i / segs, t1 = (i + 1) / segs;
-        const z0 = bridgeStartZ - t0 * bridgeLen, z1 = bridgeStartZ - t1 * bridgeLen;
+        const z0 = bridgeStartZ + t0 * bridgeLen, z1 = bridgeStartZ + t1 * bridgeLen;
         const y0 = 0.4 + Math.sin(t0 * Math.PI) * archRise;
         const y1 = 0.4 + Math.sin(t1 * Math.PI) * archRise;
         const zc = (z0 + z1) / 2, yc = (y0 + y1) / 2;
@@ -905,7 +906,7 @@ export function createVeyraWorld(container, opts) {
       const railSegs = 12;
       for (let i = 0; i <= railSegs; i++) {
         const t = i / railSegs;
-        const z = bridgeStartZ - t * bridgeLen;
+        const z = bridgeStartZ + t * bridgeLen;
         [-1, 1].forEach((sd) => circles.push({ x: ox + sd * (deckW / 2 + 0.3), z, r: 0.55 }));
       }
     })();
@@ -915,6 +916,14 @@ export function createVeyraWorld(container, opts) {
       const g = new THREE.Group(); g.position.set(ox, 0, islandZ); scene.add(g);
       // Record the walkable island deck so step() can raise the player onto it.
       islandInfo = { x: ox, z: islandZ, r: islandR, deckY: 0.62 };
+      // Island-edge fence so the player can't step off into the water, with a GAP
+      // on the north side (lower z) where The Huc bridge lands.
+      for (let ei = 0; ei < 30; ei++) {
+        const ea = (ei / 30) * Math.PI * 2;
+        const ex = Math.cos(ea) * (islandR + 0.2), ez = Math.sin(ea) * (islandR + 0.2);
+        if (ez < -islandR * 0.5 && Math.abs(ex) < 2.4) continue;   // bridge-mouth gap (north)
+        circles.push({ x: ox + ex, z: islandZ + ez, r: 1.0 });
+      }
       const base = new THREE.Mesh(new THREE.CylinderGeometry(islandR, islandR + 1.2, 1.0, 40), mossStone);
       base.position.y = -0.05; base.castShadow = true; base.receiveShadow = true; g.add(base);
       const lawn = new THREE.Mesh(new THREE.CylinderGeometry(islandR - 1, islandR - 0.5, 0.3, 36), mats.foliage);
@@ -922,8 +931,10 @@ export function createVeyraWorld(container, opts) {
       for (let i = 0; i < 3; i++) {
         const a = -1.2 + i * 1.2;
         const tr = props.tree(1.0 + (i % 2) * 0.3);
-        tr.position.set(Math.cos(a) * (islandR - 2.5), 0.5, Math.sin(a) * (islandR - 2.5) + 1.5);
+        const lxp = Math.cos(a) * (islandR - 2.5), lzp = Math.sin(a) * (islandR - 2.5) + 1.5;
+        tr.position.set(lxp, 0.5, lzp);
         g.add(tr);
+        circles.push({ x: ox + lxp, z: islandZ + lzp, r: 0.5 });
       }
       // Temple body faces the bridge/north shore (−Z).
       const t = new THREE.Group(); t.position.set(0, 0.6, 1.5); g.add(t);
@@ -1039,16 +1050,20 @@ export function createVeyraWorld(container, opts) {
         const ux = p[0] - lakeCx, uz = p[1] - lakeCz, ul = Math.hypot(ux, uz) || 1;
         const x = p[0] + (ux / ul) * 4.0, z = p[1] + (uz / ul) * 4.0;
         placeProp(props.streetlight(), x, z, Math.atan2(ux, uz));
+        circles.push({ x, z, r: 0.4 });
         if ((i / lampStep) % 2 === 0) {
           const bx = p[0] + (ux / ul) * 2.5, bz = p[1] + (uz / ul) * 2.5;
           placeProp(props.bench(), bx, bz, Math.atan2(ux, uz) + Math.PI / 2);
+          circles.push({ x: bx, z: bz, r: 0.9 });
         }
       }
     } else {
       const lampN = Math.max(8, Math.round(16 * density));
       for (let i = 0; i < lampN; i++) {
         const a = (i / lampN) * Math.PI * 2;
-        placeProp(props.streetlight(), lakeCx + Math.cos(a) * 114, lakeCz + Math.sin(a) * 114, a + Math.PI / 2);
+        const lx = lakeCx + Math.cos(a) * 114, lz = lakeCz + Math.sin(a) * 114;
+        placeProp(props.streetlight(), lx, lz, a + Math.PI / 2);
+        circles.push({ x: lx, z: lz, r: 0.4 });
       }
     }
   }
@@ -1495,8 +1510,8 @@ export function createVeyraWorld(container, opts) {
     let targetY = 0;
     if (bridgeInfo) {
       const bi = bridgeInfo;
-      if (Math.abs(pp.x - bi.ox) <= bi.halfW + 0.7 && pp.z <= bi.startZ + 0.5 && pp.z >= bi.endZ - 0.5) {
-        const tb = Math.max(0, Math.min(1, (bi.startZ - pp.z) / bi.len));
+      if (Math.abs(pp.x - bi.ox) <= bi.halfW + 0.6 && pp.z >= bi.startZ - 0.9 && pp.z <= bi.endZ + 0.6) {
+        const tb = Math.max(0, Math.min(1, (pp.z - bi.startZ) / bi.len));
         targetY = 0.4 + Math.sin(tb * Math.PI) * bi.archRise + 0.12;
       }
     }
