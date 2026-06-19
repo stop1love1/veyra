@@ -15,3 +15,5 @@ export { Avatar } from './Avatar';
 export type { AvatarProps } from './Avatar';
 export { Eyebrow } from './Eyebrow';
 export type { EyebrowProps } from './Eyebrow';
+export { Loader } from './Loader';
+export type { LoaderProps } from './Loader';

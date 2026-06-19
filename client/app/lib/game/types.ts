@@ -7,6 +7,17 @@ export type ScreenName =
 
 export type WorldPanel = 'quests' | 'cart';
 
+export type NavDir = 'forward' | 'back';
+
+/** Navigation signal driving the spatial screen transition. */
+export interface NavSignal {
+  /** Monotonic counter — changes on every navigation (use as a React key). */
+  key: number;
+  dir: NavDir;
+  from: ScreenName | null;
+  to: ScreenName;
+}
+
 export interface Player {
   name: string;
   hue: number;
@@ -49,6 +60,23 @@ export interface Game {
 
   coins: number;
   addCoins: (n: number) => void;
+  /** Derived player level (from coins). */
+  level: number;
+  /** Progress (0..1) toward the next level. */
+  levelProgress: number;
+
+  /** Favorited product ids (persisted). */
+  favorites: string[];
+  isFavorite: (id: string) => boolean;
+  toggleFavorite: (id: string) => void;
+
+  /** Quest ids already claimed (persisted). */
+  claimedQuests: string[];
+  claimQuest: (id: string, reward: number) => void;
+
+  /** Voucher id currently applied/flagged (persisted). */
+  usedVoucher: string | null;
+  useVoucher: (id: string) => void;
 
   npcOpen: string | null;
   openNPC: (id: string) => void;

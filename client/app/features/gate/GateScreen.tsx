@@ -12,6 +12,13 @@ interface GateApi {
   openGate: () => void;
 }
 
+interface GateOpts {
+  look: { hue: number; skin: number; style: string; name: string };
+  onProximity: (atGuard: boolean) => void;
+  onEnter: () => void;
+  onReady?: () => void;
+}
+
 export function GateScreen({ g }: { g: Game }) {
   const ref = React.useRef<HTMLDivElement | null>(null);
   const api = React.useRef<GateApi | null>(null);
@@ -29,7 +36,6 @@ export function GateScreen({ g }: { g: Game }) {
   // Mount the 3D gate once.
   React.useEffect(() => {
     if (!ref.current || api.current) return;
-    setReady(true);
     api.current = createVeyraGate(ref.current, {
       look: { hue, skin, style, name },
       // Guard proximity opens / closes the diegetic conversation.
@@ -43,14 +49,14 @@ export function GateScreen({ g }: { g: Game }) {
         setFade(true);
         setTimeout(() => gRef.current.go('world'), 900);
       },
-    });
+      // Async GLB load: keep the loading indicator until the scene is built.
+      onReady: () => setReady(true),
+    } as GateOpts);
     return () => { if (api.current) { api.current.dispose(); api.current = null; } };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Live look updates while talking to the guard.
   React.useEffect(() => { api.current?.setLook({ hue, skin, style }); }, [hue, skin, style]);
-
-  const vi = g.lang === 'vi';
 
   const onConfirm = () => {
     g.setPlayer({ name: name.trim() || 'Veyra', hue, skin, style });
@@ -61,7 +67,7 @@ export function GateScreen({ g }: { g: Game }) {
   return (
     <div className="v-screen v-gate">
       <div className="v-3d-canvas" ref={ref} />
-      {!ready && <div className="v-3d-loading v-mono">loading…</div>}
+      {!ready && <div className="v-3d-loading v-mono">{g.t('loading')}</div>}
 
       <div className="v-gate-top">
         <span />
@@ -70,13 +76,13 @@ export function GateScreen({ g }: { g: Game }) {
 
       {phase === 'roam' && (
         <div className="v-gate-hint v-mono">
-          {vi ? 'Đi tới cổng — gặp bảo vệ để vào Veyra' : 'Walk to the gate — meet the guard to enter Veyra'}
+          {g.t('gateHintRoam')}
         </div>
       )}
 
       {phase === 'opened' && (
         <div className="v-gate-hint v-mono">
-          {vi ? 'Cổng đã mở — tự đi qua để vào thế giới' : 'Gate open — walk through to enter'}
+          {g.t('gateHintOpen')}
         </div>
       )}
 

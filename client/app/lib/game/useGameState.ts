@@ -4,7 +4,7 @@ import { VEYRA } from '../../data';
 import { detectLite } from '../theme/detect';
 import i18n from '../i18n';
 import type {
-  Game, Player, CartLine, ScreenName, ScreenParams, WorldPanel,
+  Game, Player, CartLine, ScreenName, ScreenParams, WorldPanel, NavSignal, NavDir,
 } from './types';
 import type { Lang } from '../../data/types';
 
@@ -20,6 +20,18 @@ interface PersistedState {
   params?: ScreenParams;
   cart?: CartLine[];
   coins?: number;
+  favorites?: string[];
+  claimedQuests?: string[];
+  usedVoucher?: string | null;
+}
+
+/** Coins required per level — level rises every COINS_PER_LEVEL coins. */
+const COINS_PER_LEVEL = 500;
+function deriveLevel(coins: number): { level: number; progress: number } {
+  const safe = Math.max(0, coins);
+  const level = Math.floor(safe / COINS_PER_LEVEL) + 1;
+  const progress = (safe % COINS_PER_LEVEL) / COINS_PER_LEVEL;
+  return { level, progress };
 }
 
 /** Versioned load with a migration guard — old/foreign shapes are dropped. */
@@ -39,6 +51,9 @@ export interface GameState {
   g: Game;
   /** Current transient toast message, rendered by the app shell. */
   flash: string | null;
+  /** Spatial-transition signal — kept out of `g` so navigation doesn't recreate
+   *  the game context and re-render every screen (incl. the 3D ones). */
+  nav: NavSignal;
 }
 
 export function useGameState(): GameState {
@@ -48,12 +63,18 @@ export function useGameState(): GameState {
   const [player, setPlayer] = React.useState<Player>(saved.player || { name: 'Veyra', hue: 184 });
   const [screen, setScreen] = React.useState<ScreenName>(saved.screen || 'gate');
   const [params, setParams] = React.useState<ScreenParams>(saved.params || {});
-  const [, setHist] = React.useState<{ screen: ScreenName; params: ScreenParams }[]>([]);
+  // Navigation history lives in a ref (it's never rendered) so back() can read
+  // the stack synchronously and keep all setState calls out of any updater.
+  const histRef = React.useRef<{ screen: ScreenName; params: ScreenParams }[]>([]);
   const [cart, setCart] = React.useState<CartLine[]>(saved.cart || []);
   const [coins, setCoins] = React.useState<number>(saved.coins != null ? saved.coins : 1280);
+  const [favorites, setFavorites] = React.useState<string[]>(saved.favorites || []);
+  const [claimedQuests, setClaimedQuests] = React.useState<string[]>(saved.claimedQuests || []);
+  const [usedVoucher, setUsedVoucher] = React.useState<string | null>(saved.usedVoucher ?? null);
   const [npcOpen, setNpc] = React.useState<string | null>(null);
   const [prodOpen, setProd] = React.useState<string | null>(null);
   const [worldPanel, setWorldPanel] = React.useState<WorldPanel | null>(null);
+  const [nav, setNav] = React.useState<NavSignal>({ key: 0, dir: 'forward', from: null, to: saved.screen || 'gate' });
   const [flash, setFlash] = React.useState<string | null>(null);
   const [lite] = React.useState<boolean>(() => detectLite());
 
@@ -65,6 +86,8 @@ export function useGameState(): GameState {
   const langRef = React.useRef(lang); langRef.current = lang;
   const screenRef = React.useRef(screen); screenRef.current = screen;
   const paramsRef = React.useRef(params); paramsRef.current = params;
+  const favRef = React.useRef(favorites); favRef.current = favorites;
+  const claimedRef = React.useRef(claimedQuests); claimedRef.current = claimedQuests;
 
   const flashTimer = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const coinTimer = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -77,12 +100,12 @@ export function useGameState(): GameState {
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify({
           v: STATE_VERSION,
-          state: { lang, player, screen, params, cart, coins },
+          state: { lang, player, screen, params, cart, coins, favorites, claimedQuests, usedVoucher },
         }));
       } catch { /* quota / private mode — ignore */ }
     }, PERSIST_DEBOUNCE_MS);
     return () => clearTimeout(id);
-  }, [lang, player, screen, params, cart, coins]);
+  }, [lang, player, screen, params, cart, coins, favorites, claimedQuests, usedVoucher]);
 
   const flashMsg = React.useCallback((m: string) => {
     setFlash(m);
@@ -92,29 +115,47 @@ export function useGameState(): GameState {
 
   const t = React.useCallback((k: string) => VEYRA.t(k, langRef.current), []);
 
+  // Single place that records a navigation so <ScreenTransition> can animate it.
+  const navKey = React.useRef(0);
+  const signalNav = React.useCallback((from: ScreenName | null, to: ScreenName, dir: NavDir) => {
+    navKey.current += 1;
+    setNav({ key: navKey.current, dir, from, to });
+  }, []);
+
   const go = React.useCallback((s: ScreenName, p: ScreenParams = {}) => {
-    setHist((h) => [...h, { screen: screenRef.current, params: paramsRef.current }]);
+    const sameScreen = s === screenRef.current;
+    // Only a real screen change pushes history + plays a spatial transition.
+    // Same-screen nav (e.g. world→world shop switch) just updates params.
+    if (!sameScreen) {
+      histRef.current = [...histRef.current, { screen: screenRef.current, params: paramsRef.current }];
+      signalNav(screenRef.current, s, 'forward');
+    }
     setScreen(s);
     setParams(p);
     setNpc(null);
     setProd(null);
     setWorldPanel(null);
     document.querySelector('.v-stage-scroll')?.scrollTo(0, 0);
-  }, []);
+  }, [signalNav]);
 
   const back = React.useCallback(() => {
-    setHist((h) => {
-      if (!h.length) {
-        setScreen('world');
-        setParams({});
-        return h;
-      }
-      const prev = h[h.length - 1];
-      setScreen(prev.screen);
-      setParams(prev.params);
-      return h.slice(0, -1);
-    });
-  }, []);
+    // Resolve the target outside any updater (StrictMode-safe).
+    const h = histRef.current;
+    const prev = h.length ? h[h.length - 1] : null;
+    const target: ScreenName = prev ? prev.screen : 'world';
+    const targetParams: ScreenParams = prev ? prev.params : {};
+    // Guard the same-screen fallback (e.g. back while already on 'world') so we
+    // don't re-key ScreenTransition and remount the WebGL world. Bail before
+    // mutating history.
+    if (target === screenRef.current) return;
+    if (prev) histRef.current = h.slice(0, -1);
+    signalNav(screenRef.current, target, 'back');
+    setScreen(target);
+    setParams(targetParams);
+    setNpc(null);
+    setProd(null);
+    setWorldPanel(null);
+  }, [signalNav]);
 
   const addToCart = React.useCallback((line: CartLine) => {
     setCart((c) => {
@@ -126,8 +167,8 @@ export function useGameState(): GameState {
       }
       return [...c, line];
     });
-    flashMsg(langRef.current === 'vi' ? 'Đã thêm vào giỏ' : 'Added to cart');
-  }, [flashMsg]);
+    flashMsg(t('flashAddedCart'));
+  }, [flashMsg, t]);
 
   const setQty = React.useCallback((i: number, q: number) =>
     setCart((c) => (q <= 0 ? c.filter((_, j) => j !== i) : c.map((x, j) => (j === i ? { ...x, qty: q } : x)))), []);
@@ -144,9 +185,36 @@ export function useGameState(): GameState {
       pendingCoins.current = 0;
       coinTimer.current = undefined;
       setCoins((c) => c + total);
-      flashMsg('+' + total + (langRef.current === 'vi' ? ' xu' : ' coins'));
+      flashMsg('+' + total + ' ' + t('coinUnit'));
     }, COIN_BATCH_MS);
-  }, [flashMsg]);
+  }, [flashMsg, t]);
+
+  const toggleFavorite = React.useCallback((id: string) => {
+    setFavorites((f) => (f.includes(id) ? f.filter((x) => x !== id) : [...f, id]));
+  }, []);
+  const isFavorite = React.useCallback((id: string) => favRef.current.includes(id), []);
+
+  // Claim a quest once: award its coin reward (if any) and mark it claimed.
+  // Guarded via a ref so side effects fire exactly once (StrictMode-safe).
+  const claimQuest = React.useCallback((id: string, reward: number) => {
+    if (claimedRef.current.includes(id)) return;
+    claimedRef.current = [...claimedRef.current, id];
+    setClaimedQuests(claimedRef.current);
+    if (reward > 0) {
+      setCoins((v) => v + reward);
+      flashMsg('+' + reward + ' ' + t('coinUnit'));
+    } else {
+      flashMsg(t('flashRewardGot'));
+    }
+  }, [flashMsg, t]);
+
+  const voucherRef = React.useRef(usedVoucher); voucherRef.current = usedVoucher;
+  const useVoucher = React.useCallback((id: string) => {
+    const next = voucherRef.current === id ? null : id;
+    voucherRef.current = next;
+    setUsedVoucher(next);
+    flashMsg(t(next ? 'voucherApplied' : 'voucherRemoved'));
+  }, [flashMsg, t]);
 
   const openNPC = React.useCallback((id: string) => setNpc(id), []);
   const closeNPC = React.useCallback(() => setNpc(null), []);
@@ -160,6 +228,7 @@ export function useGameState(): GameState {
     clearTimeout(coinTimer.current);
   }, []);
 
+  const { level, progress: levelProgress } = React.useMemo(() => deriveLevel(coins), [coins]);
   const cartCount = React.useMemo(() => cart.reduce((a, x) => a + x.qty, 0), [cart]);
   const cartTotal = React.useMemo(
     () => cart.reduce((a, x) => a + (VEYRA.productById(x.id)?.price ?? 0) * x.qty, 0),
@@ -171,17 +240,22 @@ export function useGameState(): GameState {
     player, setPlayer,
     screen, params, go, back,
     cart, addToCart, setQty, removeItem, clearCart, cartCount, cartTotal,
-    coins, addCoins,
+    coins, addCoins, level, levelProgress,
+    favorites, isFavorite, toggleFavorite,
+    claimedQuests, claimQuest,
+    usedVoucher, useVoucher,
     npcOpen, openNPC, closeNPC,
     productOpen: prodOpen, openProduct, closeProduct,
     worldPanel, openWorldPanel, closeWorldPanel,
     lite, flash: flashMsg,
   }), [
     lang, player, screen, params, cart, coins, npcOpen, prodOpen, worldPanel, lite,
-    cartCount, cartTotal,
+    cartCount, cartTotal, level, levelProgress,
+    favorites, claimedQuests, usedVoucher,
     t, go, back, addToCart, setQty, removeItem, clearCart, addCoins,
+    isFavorite, toggleFavorite, claimQuest, useVoucher,
     openNPC, closeNPC, openProduct, closeProduct, openWorldPanel, closeWorldPanel, flashMsg,
   ]);
 
-  return { g, flash };
+  return { g, flash, nav };
 }

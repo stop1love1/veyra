@@ -23,12 +23,13 @@ export function HudDock({ g, active, onMap, onQuest, onCart }: HudDockProps) {
     { id: 'cart', icon: 'cart', on: () => (onCart ? onCart() : g.go('cart')), badge: g.cartCount },
   ];
   const labels: Record<string, string> = { map: g.t('map'), quest: g.t('quests'), cart: g.t('cart') };
+  const aria: Record<string, string> = { map: g.t('aMap'), quest: g.t('aQuests'), cart: g.t('aCart') };
   return (
     <div className="v-dock">
       <Glass dark className="v-dock-glass">
         {tabs.map((tb) => (
-          <button key={tb.id} className={'v-dock-btn' + (active === tb.id ? ' is-on' : '')} onClick={tb.on}>
-            <span className="v-dock-ic">
+          <button key={tb.id} className={'v-dock-btn' + (active === tb.id ? ' is-on' : '')} onClick={tb.on} aria-label={aria[tb.id]}>
+            <span className="v-dock-ic" {...(tb.id === 'cart' ? { id: 'v-bag-target' } : {})}>
               <Ic name={tb.icon} size={22} />
               {tb.badge != null && tb.badge > 0 && <span className="v-dot">{tb.badge}</span>}
             </span>

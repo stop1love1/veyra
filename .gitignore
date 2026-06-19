@@ -16,5 +16,15 @@ server/dist
 **/*.log
 npm-debug.log*
 
+# Test coverage + TS build info
+**/coverage
+*.tsbuildinfo
+
+# Server uploads (future)
+**/uploads/
+
+# Large binary source archives (extracted GLBs are committed instead)
+client/public/**/*.zip
+
 # OS / editor
 .DS_Store

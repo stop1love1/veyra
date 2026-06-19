@@ -22,6 +22,7 @@ export function Icon({ name, size = 22, sw = 1.8, style = {} }: IconProps) {
     plus:    <path d="M12 5v14M5 12h14" {...p}/>,
     minus:   <path d="M5 12h14" {...p}/>,
     heart:   <path d="M12 20s-7-4.6-9.2-9.2C1.3 7.6 3 4.5 6 4.5c2 0 3.2 1.2 4 2.4.8-1.2 2-2.4 4-2.4 3 0 4.7 3.1 3.2 6.3C19 15.4 12 20 12 20z" {...p}/>,
+    heartFill:<path d="M12 20s-7-4.6-9.2-9.2C1.3 7.6 3 4.5 6 4.5c2 0 3.2 1.2 4 2.4.8-1.2 2-2.4 4-2.4 3 0 4.7 3.1 3.2 6.3C19 15.4 12 20 12 20z" fill="currentColor" stroke="currentColor" strokeWidth={sw} strokeLinejoin="round"/>,
     star:    <path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 17l-5.2 2.6 1-5.8L3.5 9.7l5.9-.9L12 3.5z" {...p}/>,
     check:   <path d="M5 12.5l4.5 4.5L19 7" {...p}/>,
     spark:   <path d="M12 3l1.7 5.3L19 10l-5.3 1.7L12 17l-1.7-5.3L5 10l5.3-1.7L12 3z" {...p}/>,

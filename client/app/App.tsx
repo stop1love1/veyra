@@ -6,6 +6,7 @@ import { useGameState } from './lib/game';
 import { useThemeTokens } from './lib/theme/tokens';
 import { Ic } from './components/ui';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { ScreenTransition } from './components/ScreenTransition';
 import { NpcDialogue, ProductPanel, DiegeticPanel } from './components/overlays';
 import {
   GateScreen, SplashScreen, CreateScreen, WorldScreen, StoreScreen,
@@ -27,7 +28,7 @@ const SCREENS: Record<ScreenName, ComponentType<{ g: Game }>> = {
 
 export default function App() {
   useThemeTokens();
-  const { g, flash } = useGameState();
+  const { g, flash, nav } = useGameState();
   const [mounted, setMounted] = React.useState(false);
   React.useEffect(() => setMounted(true), []);
 
@@ -42,7 +43,9 @@ export default function App() {
       <div className="v-stage">
         <div className="v-stage-scroll">
           <ErrorBoundary>
-            <Screen g={g} />
+            <ScreenTransition nav={nav} reduced={g.lite}>
+              <Screen g={g} />
+            </ScreenTransition>
           </ErrorBoundary>
         </div>
         {g.npcOpen && <NpcDialogue g={g} />}

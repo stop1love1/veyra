@@ -14,6 +14,7 @@ export function NpcDialogue({ g }: { g: Game }) {
   const npc = VEYRA.NPCS[g.npcOpen!];
   const [msgs, setMsgs] = React.useState<ChatMsg[]>([{ from: 'npc', text: VEYRA.tx(npc.hello, g.lang) }]);
   const [done, setDone] = React.useState(false);
+  const [draft, setDraft] = React.useState('');
   const scrollRef = React.useRef<HTMLDivElement | null>(null);
 
   React.useEffect(() => {
@@ -28,6 +29,18 @@ export function NpcDialogue({ g }: { g: Game }) {
     }, 450);
   };
 
+  // Real (local, canned) send: echo the user's message, then the advisor replies.
+  const sendDraft = () => {
+    const text = draft.trim();
+    if (!text) return;
+    setDraft('');
+    setMsgs((m) => [...m, { from: 'me', text }]);
+    setTimeout(() => {
+      setMsgs((m) => [...m, { from: 'npc', text: g.t('npcEcho'), picks: npc.picks?.length ? npc.picks : undefined }]);
+      setDone(true);
+    }, 450);
+  };
+
   return (
     <div className="v-overlay" onClick={g.closeNPC}>
       <div className="v-sheet v-chat" onClick={(e) => e.stopPropagation()}>
@@ -38,7 +51,7 @@ export function NpcDialogue({ g }: { g: Game }) {
             <div className="v-npc-name">{npc.name}</div>
             <div className="v-mono v-npc-role">{VEYRA.tx(npc.role, g.lang)} · <span className="v-online">online</span></div>
           </div>
-          <button className="v-iconbtn" onClick={g.closeNPC}><Ic name="close" size={18} /></button>
+          <button className="v-iconbtn" onClick={g.closeNPC} aria-label={g.t('aClose')}><Ic name="close" size={18} /></button>
         </div>
 
         <div className="v-chat-body" ref={scrollRef}>
@@ -71,10 +84,19 @@ export function NpcDialogue({ g }: { g: Game }) {
               ))}
             </div>
           )}
-          <div className="v-chat-input">
-            <input className="v-input v-input-flat" placeholder={g.t('suggest') + '...'} readOnly onFocus={(e) => e.target.blur()} />
-            <button className="v-send"><Ic name="send" size={20} /></button>
-          </div>
+          <form
+            className="v-chat-input"
+            onSubmit={(e) => { e.preventDefault(); sendDraft(); }}
+          >
+            <input
+              className="v-input v-input-flat"
+              placeholder={g.t('typeMessage')}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              aria-label={g.t('typeMessage')}
+            />
+            <button type="submit" className="v-send" aria-label={g.t('aSend')}><Ic name="send" size={20} /></button>
+          </form>
         </div>
       </div>
     </div>

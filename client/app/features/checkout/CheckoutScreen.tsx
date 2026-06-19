@@ -14,7 +14,9 @@ function PayRow({ label, sub, on }: { label: string; sub?: string; on?: boolean 
 }
 
 export function CheckoutScreen({ g }: { g: Game }) {
-  const [voucher, setVoucher] = React.useState<string | null>(null);
+  // Voucher selection is global so it persists and stays in sync with the
+  // quests/rewards screen — tapping a chip applies/flags it via g.useVoucher.
+  const voucher = g.usedVoucher;
   const sub = g.cartTotal;
   const v = voucher ? VEYRA.VOUCHERS.find((x) => x.id === voucher) : null;
   let disc = 0;
@@ -24,7 +26,7 @@ export function CheckoutScreen({ g }: { g: Game }) {
   return (
     <div className="v-screen v-light">
       <div className="v-topbar v-topbar-light">
-        <button className="v-iconbtn" onClick={() => g.go('cart')}><Ic name="chevL" /></button>
+        <button className="v-iconbtn" onClick={() => g.back()} aria-label={g.t('aBack')}><Ic name="chevL" /></button>
         <span className="v-topbar-title-l">{g.t('checkout')}</span>
         <span style={{ width: 40 }} />
       </div>
@@ -41,7 +43,7 @@ export function CheckoutScreen({ g }: { g: Game }) {
           <div className="v-vouch-row">
             {VEYRA.VOUCHERS.map((vc) => (
               <button key={vc.id} className={'v-vouch' + (voucher === vc.id ? ' is-on' : '')}
-                      onClick={() => setVoucher(voucher === vc.id ? null : vc.id)}>
+                      onClick={() => g.useVoucher(vc.id)}>
                 <div className="v-vouch-off">{VEYRA.tx(vc.label, g.lang)}</div>
                 <div className="v-mono v-vouch-note">{VEYRA.tx(vc.note, g.lang)}</div>
               </button>
@@ -53,7 +55,7 @@ export function CheckoutScreen({ g }: { g: Game }) {
           <div className="v-co-head"><Ic name="bolt" size={18} /><span>{g.t('payment')}</span></div>
           <PayRow label="Veyra Pay" sub="+2% xu" on />
           <PayRow label="Momo / ZaloPay" sub="" />
-          <PayRow label="COD" sub={g.lang === 'vi' ? 'Thanh toán khi nhận' : 'Cash on delivery'} />
+          <PayRow label="COD" sub={g.t('codNote')} />
         </div>
 
         <div className="v-co-summary">

@@ -1,10 +1,18 @@
 import React from 'react';
 import { VEYRA } from '../../data';
-import { Ic, Glass, Btn, Avatar, Stars, Eyebrow, ScenePlaceholder } from '../../components/ui';
+import { Ic, Glass, Btn, Avatar, Stars, Eyebrow, ScenePlaceholder, Loader } from '../../components/ui';
 import { HudDock } from '../../components/hud';
 import { createVeyraStore } from '../../lib/three/store';
+import { registerInspect } from '../../lib/three/inspectBridge';
 import type { Game } from '../../lib/game/types';
 import type { CSSVars } from '../../lib/css';
+
+interface StoreApi {
+  dispose: () => void;
+  inspect: (id: string) => void;
+  endInspect: () => void;
+  setInspectColor: (hex: string) => void;
+}
 
 interface StoreProximity {
   id?: string;
@@ -24,7 +32,7 @@ export function StoreScreen({ g }: { g: Game }) {
 
 function Store3D({ g }: { g: Game }) {
   const ref = React.useRef<HTMLDivElement | null>(null);
-  const api = React.useRef<{ dispose: () => void } | null>(null);
+  const api = React.useRef<StoreApi | null>(null);
   const [near, setNear] = React.useState<StoreProximity | null>(null);
   const [ready, setReady] = React.useState(false);
   const shop = VEYRA.SHOPS.find((s) => s.id === (g.params.shop || 'aria'))!;
@@ -34,9 +42,9 @@ function Store3D({ g }: { g: Game }) {
 
   React.useEffect(() => {
     let cancelled = false;
+    let readyTimer: ReturnType<typeof setTimeout> | undefined;
     function start() {
       if (cancelled || !ref.current || api.current) return;
-      setReady(true);
       api.current = createVeyraStore(ref.current, {
         shopHue: shop.hue, lang: g.lang,
         labels: { advisor: g.t('staff') },
@@ -45,30 +53,54 @@ function Store3D({ g }: { g: Game }) {
         products: items.map((p) => ({ id: p.id, name: VEYRA.tx(p.name, g.lang), price: VEYRA.money(p.price), color: p.colors[0] })),
         onProximity: (s: StoreProximity | null) => setNear(s),
       });
+      // Register the inspect bridge for the whole 3D-store lifetime so the
+      // globally-rendered ProductPanel knows (on its very first render) that it
+      // is on the 3D path, and so colour swatches can retint the live garment.
+      const a = api.current;
+      registerInspect({
+        setInspectColor: (hex: string) => a.setInspectColor(hex),
+        endInspect: () => api.current?.endInspect(),
+      });
+      // Defer so the branded loader actually paints during shader compile.
+      readyTimer = setTimeout(() => { if (!cancelled) setReady(true); }, 0);
     }
     start();
-    return () => { cancelled = true; if (api.current) { api.current.dispose(); api.current = null; } };
+    return () => {
+      cancelled = true; clearTimeout(readyTimer);
+      registerInspect(null);
+      if (api.current) { api.current.dispose(); api.current = null; }
+    };
   }, [shop.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const vi = g.lang === 'vi';
+  // Drive the tactile inspector from product open/close. Opening a product
+  // dollies the store camera to its pedestal and lifts the garment onto a
+  // turntable; closing tweens back to the follow camera. The colour-swatch
+  // retint flows through the inspect bridge (registered here for ProductPanel).
+  React.useEffect(() => {
+    const a = api.current;
+    if (!a) return;
+    if (g.productOpen) a.inspect(g.productOpen);
+    else a.endInspect();
+  }, [g.productOpen]);
+
   let prompt: EnterPrompt | null = null;
   if (near) {
-    if (near.type === 'exit') prompt = { sub: vi ? 'Cửa ra' : 'Exit', title: vi ? 'Ra quảng trường' : 'Back to plaza', cta: vi ? 'Ra' : 'Leave', act: () => g.go('world') };
+    if (near.type === 'exit') prompt = { sub: g.t('exit'), title: g.t('backToPlaza'), cta: g.t('leave'), act: () => g.go('world') };
     else if (near.type === 'npc') prompt = { sub: VEYRA.tx(npc.role, g.lang), title: npc.name, cta: g.t('talkTo'), act: () => g.openNPC(shop.npc) };
-    else { const p = near.id ? VEYRA.productById(near.id) : undefined; prompt = { sub: g.t('shelf'), title: p ? VEYRA.tx(p.name, g.lang) : '', cta: vi ? 'Xem' : 'View', act: () => near.id && g.openProduct(near.id) }; }
+    else { const p = near.id ? VEYRA.productById(near.id) : undefined; prompt = { sub: g.t('shelf'), title: p ? VEYRA.tx(p.name, g.lang) : '', cta: g.t('view'), act: () => near.id && g.openProduct(near.id) }; }
   }
 
   return (
     <div className="v-screen v-world3d">
       <div className="v-3d-canvas" ref={ref} />
-      {!ready && <div className="v-3d-loading v-mono">loading…</div>}
+      {!ready && <div className="v-3d-loading"><Loader label={g.t('loadingStore')} /></div>}
       <div className="v-topbar">
-        <button className="v-iconbtn-d" onClick={() => g.go('world')}><Ic name="chevL" /></button>
+        <button className="v-iconbtn-d" onClick={() => g.go('world')} aria-label={g.t('aBack')}><Ic name="chevL" /></button>
         <div className="v-topbar-shop">
           <div className="v-topbar-title">{VEYRA.tx(shop.name, g.lang)}</div>
           <div className="v-mono v-topbar-sub">{VEYRA.tx(shop.cat, g.lang)}</div>
         </div>
-        <button className="v-iconbtn-d" onClick={() => g.openWorldPanel('cart')}>
+        <button className="v-iconbtn-d" onClick={() => g.openWorldPanel('cart')} aria-label={g.t('aCart')}>
           <Ic name="cart" />{g.cartCount > 0 && <span className="v-dot">{g.cartCount}</span>}
         </button>
       </div>
@@ -100,12 +132,12 @@ function StoreLite({ g }: { g: Game }) {
       <div className="v-store-floor" />
 
       <div className="v-topbar">
-        <button className="v-iconbtn-d" onClick={() => g.go('world')}><Ic name="chevL" /></button>
+        <button className="v-iconbtn-d" onClick={() => g.go('world')} aria-label={g.t('aBack')}><Ic name="chevL" /></button>
         <div className="v-topbar-shop">
           <div className="v-topbar-title">{VEYRA.tx(shop.name, g.lang)}</div>
           <div className="v-mono v-topbar-sub">{VEYRA.tx(shop.cat, g.lang)}</div>
         </div>
-        <button className="v-iconbtn-d" onClick={() => g.go('cart')}>
+        <button className="v-iconbtn-d" onClick={() => g.go('cart')} aria-label={g.t('aCart')}>
           <Ic name="cart" />{g.cartCount > 0 && <span className="v-dot">{g.cartCount}</span>}
         </button>
       </div>

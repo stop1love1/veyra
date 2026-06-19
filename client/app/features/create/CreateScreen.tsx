@@ -1,14 +1,10 @@
 import React from 'react';
 import { Ic, Btn, Avatar } from '../../components/ui';
+import { GATE_HUES, GATE_STYLES } from '../gate/GuardDialogue';
 import type { Game } from '../../lib/game/types';
 import type { CSSVars } from '../../lib/css';
 
-const HUES = [184, 150, 210, 250, 95, 30];
-const STYLES = [
-  { id: 'minimal', vi: 'Tối giản', en: 'Minimal' },
-  { id: 'street', vi: 'Đường phố', en: 'Street' },
-  { id: 'soft', vi: 'Dịu dàng', en: 'Soft' },
-];
+const HUES = GATE_HUES;
 
 export function CreateScreen({ g }: { g: Game }) {
   const [name, setName] = React.useState(g.player.name);
@@ -51,9 +47,9 @@ export function CreateScreen({ g }: { g: Game }) {
         <div className="v-field">
           <span className="v-field-label">{g.t('style')}</span>
           <div className="v-seg">
-            {STYLES.map((s) => (
+            {GATE_STYLES.map((s) => (
               <button key={s.id} className={'v-seg-btn' + (s.id === style ? ' is-on' : '')}
-                      onClick={() => setStyle(s.id)}>{g.lang === 'vi' ? s.vi : s.en}</button>
+                      onClick={() => setStyle(s.id)}>{g.t(s.key)}</button>
             ))}
           </div>
         </div>

@@ -1,10 +1,32 @@
 // @ts-nocheck -- ported vanilla three.js engine; internals intentionally untyped
-// gate.ts — Veyra entry: 3D gate + character customization + walk-in (three.js ES module).
-// createVeyraGate(container, opts) -> { dispose, setLook, enter }
-// opts: { look:{hue,skin,style,name}, onEnter() }
+// gate.ts — Veyra entry: low-poly Kenney City Kit approach street + gateway into
+// the Veyra district + character customization + walk-in (three.js ES module).
+//
+//   createVeyraGate(container, opts) -> { setLook, openGate, dispose }
+//   opts: { look:{hue,skin,style,name}, onProximity(atGuard:boolean), onEnter(), onReady?() }
+//
+// Re-skinned to match world.ts / worldKit.ts: the realistic Sky / procedural PBR
+// materials / procedural buildings + streetprops are gone. The scene is now built
+// by cloning Kenney City Kit (CC0) GLB pieces at CITY_SCALE=7 — a short approach
+// avenue (straight road + sidewalks) flanked by Kenney buildings & street lights,
+// leading to a roundabout-plaza gateway into the district. Lighting mirrors
+// worldKit: HemisphereLight + DirectionalLight sun + RoomEnvironment IBL (PMREM) +
+// ACES tonemap + light fog + a pleasant sky colour.
+//
+// The FLOW is preserved verbatim: free-roam (keyboard + joystick + orbit camera);
+// an invisible barrier in front of the guard until openGate(); onProximity(atGuard)
+// fires within ~3m of the guard; openGate() slides the construction barriers aside
+// + steps the guard aside + drops the barrier; crossing the threshold fires
+// onEnter() once. Assets load async; build() runs after preload, then opts.onReady().
 
 import * as THREE from 'three';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { hsl, SKINS } from './shared/helpers';
 import { buildAvatar } from './shared/avatar';
+import { createKeyboard, createJoystick, createOrbitCamera } from './shared/controls';
+import { disposeScene } from './shared/dispose';
+import { detectQuality, applyQualityToRenderer } from './shared/quality';
+import { createKitLoader } from './shared/assets';
 
 export function createVeyraGate(container, opts) {
   opts = opts || {};
@@ -12,275 +34,312 @@ export function createVeyraGate(container, opts) {
 
   const W = () => container.clientWidth || 390;
   const H = () => container.clientHeight || 700;
-  const hsl = (h, s, l) => new THREE.Color().setHSL(h / 360, s, l);
-  const SKINS = ['#f1c9a5', '#e0a878', '#c9854f', '#8d5a36'];
 
-  // ── Renderer / scene ─────────────────────────────────────
-  const renderer = new THREE.WebGLRenderer({ antialias: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  // ── Quality tier ─────────────────────────────────────────
+  let q = detectQuality();
+
+  // ── Renderer ─────────────────────────────────────────────
+  const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+  q = detectQuality(renderer); // refine with real GL caps
+  applyQualityToRenderer(renderer, q);
   renderer.setSize(W(), H());
-  renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.05;
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.domElement.style.display = 'block';
+  renderer.domElement.style.touchAction = 'none';
   container.appendChild(renderer.domElement);
 
+  // ── Scene + camera ───────────────────────────────────────
+  const SKY_COLOR = new THREE.Color('#9fd4ea');
+  const FOG_COLOR = new THREE.Color('#bfe0d8');
+  renderer.setClearColor(SKY_COLOR, 1);   // so the container isn't black during async load
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color('#16383c');
-  scene.fog = new THREE.Fog('#16383c', 22, 52);
+  scene.background = SKY_COLOR;
+  scene.fog = new THREE.Fog(FOG_COLOR, 140, 620);
 
-  const camera = new THREE.PerspectiveCamera(42, W() / H(), 0.1, 200);
-  camera.position.set(0, 3.0, 8.4);
-  const camLook = new THREE.Vector3(0, 1.5, -3);
+  const camera = new THREE.PerspectiveCamera(48, W() / H(), 0.1, 1200);
+  camera.position.set(0, 30, 70);
 
-  scene.add(new THREE.HemisphereLight('#dff5ee', '#2b524c', 1.05));
-  scene.add(new THREE.AmbientLight('#cfeee8', 0.4));
-  const sun = new THREE.DirectionalLight('#fff3df', 1.2);
-  sun.position.set(-8, 16, 8); sun.castShadow = true;
-  sun.shadow.mapSize.set(1024, 1024);
-  const sd = 18; sun.shadow.camera.left = -sd; sun.shadow.camera.right = sd;
-  sun.shadow.camera.top = sd; sun.shadow.camera.bottom = -sd;
-  sun.shadow.camera.near = 1; sun.shadow.camera.far = 60; sun.shadow.bias = -0.0004;
+  // ── Lighting: hemi + sun + RoomEnvironment IBL (mirrors worldKit) ─────────
+  const hemi = new THREE.HemisphereLight('#eaf6ff', '#6f8a6a', 1.05);
+  scene.add(hemi);
+  const sun = new THREE.DirectionalLight('#fff2da', 2.1);
+  sun.position.set(80, 180, 120);
+  if (q.shadowMapSize > 0) {
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(q.shadowMapSize, q.shadowMapSize);
+    const d = 140;
+    Object.assign(sun.shadow.camera, { left: -d, right: d, top: d, bottom: -d, near: 1, far: 600 });
+    sun.shadow.bias = -0.0004;
+  }
   scene.add(sun);
+  scene.add(sun.target);
 
-  // ── Ground + path ────────────────────────────────────────
-  const ground = new THREE.Mesh(new THREE.CircleGeometry(50, 48),
-    new THREE.MeshStandardMaterial({ color: '#5f9a8c', roughness: 1 }));
-  ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; scene.add(ground);
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  const roomEnv = new RoomEnvironment();
+  const envRT = pmrem.fromScene(roomEnv, 0.04);
+  scene.environment = envRT.texture;
+  if (roomEnv.dispose) roomEnv.dispose();
 
-  const path = new THREE.Mesh(new THREE.PlaneGeometry(4.4, 30),
-    new THREE.MeshStandardMaterial({ color: '#cdd9cf', roughness: .95 }));
-  path.rotation.x = -Math.PI / 2; path.position.set(0, 0.02, -6); path.receiveShadow = true; scene.add(path);
+  // ── Layout constants (scaled world units) ────────────────
+  const CITY_SCALE = 7;          // tile ≈ 1u -> 7u footprint
+  const TILE = CITY_SCALE;
+  const APPROACH = 4;            // number of straight road tiles in the approach avenue
+  // The avenue runs along Z. The player approaches from +Z and walks toward the
+  // city (−Z). Tiles sit at z = i*TILE for i in [-1 .. APPROACH-1] roughly; the
+  // gateway/roundabout caps the far (−Z) end.
+  const GZ = -(APPROACH - 0.5) * TILE;   // gateway plane (z of the barriers / threshold)
+  const PATH_HALF = TILE * 0.45;          // half-width of the clear corridor at the gate
+  const START_Z = (APPROACH - 0.5) * TILE; // player spawn at the mouth of the avenue
+  const PLAY_HALF_X = TILE * 1.2;          // lateral play bound (avenue width)
+  const PLAY_MAX_Z = START_Z + TILE * 0.6;
 
-  // ── Gate wall ────────────────────────────────────────────
-  const GZ = -12;
-  const stone = new THREE.MeshStandardMaterial({ color: '#3c5b5a', roughness: .9 });
-  const stone2 = new THREE.MeshStandardMaterial({ color: '#324d4c', roughness: .9 });
-  function wallSeg(x, w) {
-    const m = new THREE.Mesh(new THREE.BoxGeometry(w, 8, 1.4), stone);
-    m.position.set(x, 4, GZ); m.castShadow = true; m.receiveShadow = true; scene.add(m);
-    // cap
-    const cap = new THREE.Mesh(new THREE.BoxGeometry(w + .4, .6, 1.8), stone2);
-    cap.position.set(x, 8.1, GZ); scene.add(cap);
+  // ── Disposal / build state ───────────────────────────────
+  let disposed = false;
+  let started = false;       // build complete (gameplay active)
+
+  // ── Kit loader ───────────────────────────────────────────
+  const kit = createKitLoader();
+  const BUILD = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n'];
+  const SKY = ['a', 'b', 'c', 'd', 'e'];
+  const preloadNames = [
+    'road:straight', 'road:side', 'road:roundabout', 'road:light-square',
+    'road:construction-barrier', 'road:construction-cone',
+    ...BUILD.map((b) => 'build:building-' + b),
+    ...SKY.map((s) => 'build:building-skyscraper-' + s),
+    'build:detail-awning', 'build:detail-awning-wide', 'build:detail-parasol-a', 'build:detail-parasol-b',
+  ];
+
+  // deterministic hash so the street is varied but stable
+  const hash01 = (x, z) => { const s = Math.sin(x * 12.9898 + z * 78.233) * 43758.5453; return s - Math.floor(s); };
+
+  // place a clone of `name` at scaled world (x,z), rotation ry, ground y=0.
+  function put(group, name, x, z, ry, scale) {
+    if (!kit.has(name)) return null;
+    const c = kit.get(name);
+    c.position.set(x, 0, z);
+    c.rotation.y = ry || 0;
+    c.scale.setScalar(scale != null ? scale : CITY_SCALE);
+    group.add(c);
+    return c;
   }
-  wallSeg(-6.5, 7);   // left
-  wallSeg(6.5, 7);    // right
-  // lintel over opening
-  const lintel = new THREE.Mesh(new THREE.BoxGeometry(6.4, 1.6, 1.4), stone2);
-  lintel.position.set(0, 7.0, GZ); lintel.castShadow = true; scene.add(lintel);
-  // pillars
-  [-2.9, 2.9].forEach(px => {
-    const p = new THREE.Mesh(new THREE.CylinderGeometry(.5, .55, 6.2, 12), stone2);
-    p.position.set(px, 3.1, GZ + .2); p.castShadow = true; scene.add(p);
-    const orb = new THREE.Mesh(new THREE.SphereGeometry(.34, 14, 14),
-      new THREE.MeshStandardMaterial({ color: hsl(look.hue, .6, .6), emissive: hsl(look.hue, .7, .4), emissiveIntensity: .9 }));
-    orb.position.set(px, 6.5, GZ + .2); scene.add(orb);
-  });
-
-  // ── Gate doors (hinged) ──────────────────────────────────
-  const doorMat = new THREE.MeshStandardMaterial({ color: '#274240', roughness: .7, metalness: .2 });
-  const trimMat = new THREE.MeshStandardMaterial({ color: hsl(look.hue, .45, .5), roughness: .5, metalness: .3 });
-  function door(side) {
-    const pivot = new THREE.Group();
-    pivot.position.set(side * 2.7, 0, GZ + .3);   // hinge at outer edge
-    const panel = new THREE.Mesh(new THREE.BoxGeometry(2.55, 5.6, .28), doorMat);
-    panel.position.set(-side * 1.27, 2.9, 0); panel.castShadow = true; pivot.add(panel);
-    for (let i = 0; i < 3; i++) {
-      const bar = new THREE.Mesh(new THREE.BoxGeometry(2.3, .16, .34), trimMat);
-      bar.position.set(-side * 1.27, 1.4 + i * 1.5, 0); pivot.add(bar);
-    }
-    const knob = new THREE.Mesh(new THREE.SphereGeometry(.16, 10, 10), trimMat);
-    knob.position.set(-side * 0.2, 2.9, .2); pivot.add(knob);
-    scene.add(pivot); return pivot;
+  function footprintR(obj) {
+    const s = new THREE.Box3().setFromObject(obj).getSize(new THREE.Vector3());
+    return Math.max(s.x, s.z) / 2;
   }
-  const doorL = door(-1), doorR = door(1);
-
-  // ── Sign (canvas texture) ────────────────────────────────
-  const sCanvas = document.createElement('canvas'); sCanvas.width = 512; sCanvas.height = 150;
-  const sctx = sCanvas.getContext('2d');
-  function drawSign() {
-    sctx.clearRect(0, 0, 512, 150);
-    sctx.fillStyle = '#eafcf8';
-    sctx.font = '700 92px "Be Vietnam Pro", system-ui, sans-serif';
-    sctx.textAlign = 'center'; sctx.textBaseline = 'middle';
-    sctx.shadowColor = 'rgba(0,0,0,.4)'; sctx.shadowBlur = 12;
-    let ls = 'VEYRA', x = 256 - 4 * 18;
-    sctx.fillText('V E Y R A', 256, 80);
-  }
-  drawSign();
-  const signTex = new THREE.CanvasTexture(sCanvas);
-  signTex.anisotropy = 4;
-  const sign = new THREE.Mesh(new THREE.PlaneGeometry(4.6, 1.35),
-    new THREE.MeshBasicMaterial({ map: signTex, transparent: true }));
-  sign.position.set(0, 7.05, GZ + .75); scene.add(sign);
-  // glow arch
-  const arch = new THREE.Mesh(new THREE.TorusGeometry(2.2, .12, 8, 40, Math.PI),
-    new THREE.MeshBasicMaterial({ color: hsl(look.hue, .65, .6) }));
-  arch.position.set(0, 7.6, GZ + .7); scene.add(arch);
-
-  // banners
-  [-6.5, 6.5].forEach(bx => {
-    const ban = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 4.2),
-      new THREE.MeshStandardMaterial({ color: hsl(look.hue, .5, .42), roughness: .8, side: THREE.DoubleSide }));
-    ban.position.set(bx, 4.2, GZ + .75); scene.add(ban);
-  });
-
-  // ── Decor: torches, trees ────────────────────────────────
-  function torch(x, z) {
-    const g = new THREE.Group(); g.position.set(x, 0, z);
-    const pole = new THREE.Mesh(new THREE.CylinderGeometry(.08, .1, 2.6, 8),
-      new THREE.MeshStandardMaterial({ color: '#33403e', roughness: .8 }));
-    pole.position.y = 1.3; pole.castShadow = true; g.add(pole);
-    const flame = new THREE.Mesh(new THREE.SphereGeometry(.24, 10, 10),
-      new THREE.MeshStandardMaterial({ color: '#ffe0a0', emissive: '#ffcf6e', emissiveIntensity: 1 }));
-    flame.position.y = 2.75; g.add(flame);
-    const light = new THREE.PointLight('#ffd27a', .7, 9); light.position.set(x, 2.8, z); scene.add(light);
-    scene.add(g); return flame;
-  }
-  const flames = [torch(-3.4, -3.5), torch(3.4, -3.5), torch(-3.4, GZ + 1.4), torch(3.4, GZ + 1.4)];
-  function tree(x, z, s) {
-    const g = new THREE.Group(); g.position.set(x, 0, z); g.scale.setScalar(s);
-    const tr = new THREE.Mesh(new THREE.CylinderGeometry(.16, .22, 1.1, 6),
-      new THREE.MeshStandardMaterial({ color: '#7c5e42', roughness: 1 }));
-    tr.position.y = .55; tr.castShadow = true; g.add(tr);
-    const lm = new THREE.MeshStandardMaterial({ color: hsl(150, .35, .46), roughness: 1 });
-    [[0, 1.5, 1], [.4, 2, .7], [-.35, 2.05, .65]].forEach(([dx, dy, r]) => {
-      const m = new THREE.Mesh(new THREE.IcosahedronGeometry(r, 0), lm);
-      m.position.set(dx, dy, 0); m.castShadow = true; g.add(m);
-    });
-    scene.add(g);
-  }
-  for (let i = 0; i < 10; i++) {
-    const side = i % 2 === 0 ? -1 : 1;
-    const x = side * (5 + Math.random() * 7);
-    const z = -10 + Math.random() * 12;   // sides only, keep the corridor clear
-    tree(x, z, .7 + Math.random() * .7);
+  function pickBuilding(h, nearPlaza) {
+    if (nearPlaza && h > 0.55) return 'build:building-skyscraper-' + SKY[Math.floor(h * SKY.length) % SKY.length];
+    return 'build:building-' + BUILD[Math.floor(h * BUILD.length) % BUILD.length];
   }
 
-  // ── Characters (shared avatar builder) ───────────────────
-  // player
+  // ── Player avatar (built up front so dispose is uniform) ──
   const player = buildAvatar({ hue: look.hue, skinColor: SKINS[look.skin] });
-  player.group.position.set(0, 0, 6);
-  player.group.rotation.y = Math.PI; // face the gate (-z); player walks up to it
+  player.group.position.set(0, 0, START_Z);
+  player.group.rotation.y = Math.PI; // face the gate (−Z)
   scene.add(player.group);
-  const blob = new THREE.Mesh(new THREE.CircleGeometry(.5, 20),
-    new THREE.MeshBasicMaterial({ color: '#10302d', transparent: true, opacity: .28 }));
-  blob.rotation.x = -Math.PI / 2; blob.position.set(0, .04, 0); scene.add(blob);
+  player.setStyle(look.style);
+  const blob = new THREE.Mesh(new THREE.CircleGeometry(0.55, 20),
+    new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.26 }));
+  blob.rotation.x = -Math.PI / 2; blob.position.set(0, 0.05, START_Z); scene.add(blob);
 
-  // guard
+  // ── Guard (neutral attendant) standing in the path ───────
   const guard = buildAvatar({ hue: 200, skinColor: SKINS[2] });
-  guard.group.position.set(0, 0, GZ + 3.0);   // centered, blocking the opening
-  guard.group.rotation.y = 0;                  // face the incoming player (+z)
-  guard.mats.clothMat.color = hsl(195, .4, .34);
-  guard.mats.pantsMat.color = hsl(195, .35, .22);
+  const guardZ0 = GZ + TILE * 0.55;
+  guard.group.position.set(0, 0, guardZ0);
+  guard.group.rotation.y = 0;                  // face the incoming player (+Z)
+  guard.mats.clothMat.color = hsl(210, 0.12, 0.32);
+  guard.mats.pantsMat.color = hsl(210, 0.08, 0.2);
   scene.add(guard.group);
-  // guard hat (tall)
-  const ghat = new THREE.Mesh(new THREE.CylinderGeometry(.26, .3, .5, 14), new THREE.MeshStandardMaterial({ color: hsl(195, .45, .28), roughness: .8 }));
-  ghat.position.y = 1.95; guard.group.add(ghat);
-  // staff
-  const staff = new THREE.Mesh(new THREE.CylinderGeometry(.045, .045, 2.4, 8), new THREE.MeshStandardMaterial({ color: '#caa15a', roughness: .6, metalness: .3 }));
-  staff.position.set(.4, 1.2, 0); guard.group.add(staff);
+  // Simple cap.
+  const gcap = new THREE.Mesh(new THREE.CylinderGeometry(0.27, 0.29, 0.18, 16),
+    new THREE.MeshStandardMaterial({ color: hsl(210, 0.12, 0.26), roughness: 0.8 }));
+  gcap.position.y = 1.86; guard.group.add(gcap);
+  const gvisor = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.05, 0.3),
+    new THREE.MeshStandardMaterial({ color: hsl(210, 0.1, 0.2), roughness: 0.8 }));
+  gvisor.position.set(0, 1.8, 0.26); guard.group.add(gvisor);
+  const guardBlob = new THREE.Mesh(new THREE.CircleGeometry(0.5, 18),
+    new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.24 }));
+  guardBlob.rotation.x = -Math.PI / 2; guardBlob.position.set(0, 0.05, guardZ0); scene.add(guardBlob);
+  const guardX0 = guard.group.position.x;
 
-  // bystanders (unregistered avatars outside)
+  // ── Bystanders (people waiting near the entrance) ────────
   const byStanders = [];
-  [[-4.2, -2.2, 130], [4.4, -1.6, 60], [-5.2, 1.4, 30], [5.0, 1.0, 280]].forEach(([x, z, h], i) => {
+  [[-TILE * 1.0, TILE * 1.6, 130], [TILE * 1.0, TILE * 1.2, 60],
+   [-TILE * 0.9, -TILE * 0.4, 30], [TILE * 0.9, -TILE * 0.2, 280]].forEach(([x, z, h], i) => {
     const c = buildAvatar({ hue: h, skinColor: SKINS[i % SKINS.length] });
     c.group.position.set(x, 0, z);
     c.group.rotation.y = Math.random() * Math.PI * 2;
-    c.group.scale.setScalar(.96);
+    c.group.scale.setScalar(0.96);
     c.setStyle(['minimal', 'street', 'soft'][i % 3]);
     scene.add(c.group);
+    const bb = new THREE.Mesh(new THREE.CircleGeometry(0.5, 16),
+      new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.22 }));
+    bb.rotation.x = -Math.PI / 2; bb.position.set(x, 0.05, z); scene.add(bb);
     byStanders.push({ c, ph: Math.random() * 6 });
   });
 
-  player.setStyle(look.style);
+  // ── Barrier handles (filled in build()) ──────────────────
+  // Two construction barriers slide aside on openGate(); their pivots sit at the
+  // gateway plane and rotate/translate outward.
+  const barriers = [];   // { group, x0, side }
+
+  // ── Build the scene (async, after preload) ───────────────
+  function build() {
+    if (disposed) return;
+    const density = q.propDensity;
+    const city = new THREE.Group();
+    scene.add(city);
+
+    // grass ground plane (large; fog hides the far edge)
+    const ground = new THREE.Mesh(
+      new THREE.PlaneGeometry(1600, 1600),
+      new THREE.MeshStandardMaterial({ color: 0x7fae5f, roughness: 1, metalness: 0 }),
+    );
+    ground.rotation.x = -Math.PI / 2; ground.position.y = -0.02; ground.receiveShadow = true;
+    scene.add(ground);
+
+    // ── Approach avenue: straight road tiles along Z ──────────
+    // i runs from the player end (+Z) toward the gateway (−Z).
+    for (let i = -1; i < APPROACH; i++) {
+      const z = -i * TILE + TILE * 0.5;   // tiles centred so the gate plane lands at GZ
+      put(city, 'road:straight', 0, z, 0);
+      // sidewalks both sides
+      put(city, 'road:side', -TILE, z, 0);
+      put(city, 'road:side', TILE, z, Math.PI);
+      // building slots beyond the sidewalks, facing the avenue
+      [-1, 1].forEach((sgn) => {
+        const bx = sgn * 2 * TILE;
+        const h = hash01(bx, z);
+        const nearPlaza = i >= APPROACH - 2;
+        const faceRy = sgn < 0 ? Math.PI / 2 : -Math.PI / 2;  // face avenue centreline
+        const b = put(city, pickBuilding(h, nearPlaza), bx, z, faceRy);
+        // a shop awning / parasol on some façades for character
+        if (b && h > 0.45) {
+          const r = footprintR(b);
+          const det = ['detail-awning', 'detail-awning-wide', 'detail-parasol-a', 'detail-parasol-b'][Math.floor(hash01(z, bx) * 4) % 4];
+          const fx = Math.sin(faceRy);
+          put(city, 'build:' + det, bx + fx * (r * 0.55), z, faceRy);
+        }
+      });
+      // street lights at intervals along the sidewalk edges
+      if (i % 2 === 0) {
+        put(city, 'road:light-square', -TILE * 0.85, z, 0);
+        put(city, 'road:light-square', TILE * 0.85, z, Math.PI);
+      }
+    }
+
+    // ── Gateway / threshold: a roundabout-plaza into the district ─────────────
+    // Sits past the gate plane (further −Z); reads as "the entrance to the
+    // Veyra district". Skyscrapers anchor it on the horizon.
+    const plazaZ = GZ - TILE * 1.4;
+    put(city, 'road:roundabout', 0, plazaZ, 0);
+    // a couple more straight tiles + sidewalks leading off the plaza into the city
+    for (let j = 1; j <= 2; j++) {
+      const z = plazaZ - j * TILE;
+      put(city, 'road:straight', 0, z, 0);
+      put(city, 'road:side', -TILE, z, 0);
+      put(city, 'road:side', TILE, z, Math.PI);
+    }
+    // skyscraper district anchors flanking + behind the plaza
+    const anchors = [
+      [-2.2 * TILE, plazaZ, Math.PI / 2], [2.2 * TILE, plazaZ, -Math.PI / 2],
+      [-2.0 * TILE, plazaZ - 2 * TILE, Math.PI / 2], [2.0 * TILE, plazaZ - 2 * TILE, -Math.PI / 2],
+      [0, plazaZ - 3 * TILE, 0],
+    ];
+    anchors.forEach(([x, z, ry], i) => {
+      put(city, 'build:building-skyscraper-' + SKY[i % SKY.length], x, z, ry);
+    });
+
+    // ── The closed gate: two construction barriers across the road ───────────
+    // Each barrier hangs on a pivot at the inner edge of the opening; on
+    // openGate() the pivot rotates outward + slides aside, clearing the corridor.
+    if (kit.has('road:construction-barrier')) {
+      [-1, 1].forEach((side) => {
+        const g = new THREE.Group();
+        // pivot at the corridor edge, on the gate plane
+        g.position.set(side * PATH_HALF, 0, GZ);
+        const bar = kit.get('road:construction-barrier');
+        // lay the barrier across the road: span inward from the pivot toward centre
+        bar.scale.setScalar(CITY_SCALE * 0.5);
+        bar.rotation.y = Math.PI / 2;                     // align its length across the road
+        bar.position.set(-side * (PATH_HALF * 0.5), 0, 0);
+        g.add(bar);
+        // a couple of cones in front for read
+        if (kit.has('road:construction-cone')) {
+          const cone = kit.get('road:construction-cone');
+          cone.scale.setScalar(CITY_SCALE * 0.45);
+          cone.position.set(-side * (PATH_HALF * 0.55), 0, TILE * 0.35);
+          g.add(cone);
+        }
+        scene.add(g);
+        barriers.push({ group: g, x0: side * PATH_HALF, side });
+      });
+    }
+
+    // point the sun shadow target at the avenue centre
+    sun.target.position.set(0, 0, GZ + TILE);
+
+    // frame the camera behind the player looking toward the gate
+    orbitCam.cam.yaw = 0; orbitCam.cam.elev = 0.42; orbitCam.cam.dist = TILE * 4.0;
+
+    started = true;
+    opts.onReady && opts.onReady();
+  }
+
+  kit.preload(preloadNames).then(() => {
+    if (disposed) { kit.dispose(); return; }
+    build();
+  }).catch(() => {
+    kit.dispose();
+    if (!disposed) { started = true; opts.onReady && opts.onReady(); }
+  });
 
   // ── setLook (live) ───────────────────────────────────────
   function setLook(next) {
     look = Object.assign(look, next);
-    player.mats.clothMat.color = hsl(look.hue, .55, .52);
-    player.mats.pantsMat.color = hsl(look.hue, .35, .3);
-    player.mats.hairMat.color = hsl(look.hue, .4, .2);
+    player.mats.clothMat.color = hsl(look.hue, 0.55, 0.52);
+    player.mats.pantsMat.color = hsl(look.hue, 0.35, 0.3);
+    player.mats.hairMat.color = hsl(look.hue, 0.4, 0.2);
     player.mats.skinMat.color = new THREE.Color(SKINS[look.skin] || SKINS[1]);
     player.setStyle(look.style);
-    // tint gate accents to chosen hue
-    trimMat.color = hsl(look.hue, .45, .5);
-    arch.material.color = hsl(look.hue, .65, .6);
   }
 
   // ── Controls: free roam (joystick + keyboard + orbit camera) ──
   const sstep = (a, b, t) => { const x = Math.max(0, Math.min(1, (t - a) / (b - a))); return x * x * (3 - 2 * x); };
-  const SPEED = 5.4;
+  const SPEED = TILE * 0.8;
+  const kbd = createKeyboard();
+  const keys = kbd.keys;
+  const stick = createJoystick(container);
+  const joy = stick.joy;
 
-  const keys = {};
-  const onKey = (e, down) => {
-    const k = e.key.toLowerCase();
-    if (['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(k)) { keys[k] = down; e.preventDefault(); }
-  };
-  const kd = e => onKey(e, true), ku = e => onKey(e, false);
-  window.addEventListener('keydown', kd); window.addEventListener('keyup', ku);
-
-  const joy = { active: false, id: null, x: 0, y: 0, cx: 0, cy: 0 };
-  const base = document.createElement('div'); base.className = 'v-joy-base';
-  const knob = document.createElement('div'); knob.className = 'v-joy-knob';
-  base.appendChild(knob); container.appendChild(base);
-  const R = 52;
-  function joyStart(e) { joy.active = true; joy.id = e.pointerId; const r = base.getBoundingClientRect(); joy.cx = r.left + r.width / 2; joy.cy = r.top + r.height / 2; base.setPointerCapture(e.pointerId); joyMove(e); }
-  function joyMove(e) { if (!joy.active || e.pointerId !== joy.id) return; let dx = e.clientX - joy.cx, dy = e.clientY - joy.cy; const d = Math.hypot(dx, dy) || 1; if (d > R) { dx = dx / d * R; dy = dy / d * R; } knob.style.transform = `translate(${dx}px,${dy}px)`; joy.x = dx / R; joy.y = dy / R; }
-  function joyEnd(e) { if (e.pointerId !== joy.id) return; joy.active = false; joy.x = 0; joy.y = 0; knob.style.transform = 'translate(0,0)'; }
-  base.addEventListener('pointerdown', joyStart);
-  base.addEventListener('pointermove', joyMove);
-  base.addEventListener('pointerup', joyEnd);
-  base.addEventListener('pointercancel', joyEnd);
-
-  let camYaw = 0, camElev = 0.4, camDist = 9.5;
-  const dom = renderer.domElement;
-  const orbit = { pointers: new Map(), lastDist: 0 };
-  function camDown(e) { orbit.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY }); try { dom.setPointerCapture(e.pointerId); } catch (_) {} }
-  function camMove(e) {
-    if (!orbit.pointers.has(e.pointerId)) return;
-    const prev = orbit.pointers.get(e.pointerId);
-    const dx = e.clientX - prev.x, dy = e.clientY - prev.y;
-    orbit.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if (orbit.pointers.size >= 2) {
-      const pts = [...orbit.pointers.values()];
-      const d = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-      if (orbit.lastDist) camDist = Math.max(5, Math.min(15, camDist - (d - orbit.lastDist) * 0.05));
-      orbit.lastDist = d;
-    } else {
-      camYaw -= dx * 0.007;
-      camElev = Math.max(0.18, Math.min(0.9, camElev + dy * 0.005));
-    }
-  }
-  function camUp(e) { orbit.pointers.delete(e.pointerId); if (orbit.pointers.size < 2) orbit.lastDist = 0; }
-  dom.addEventListener('pointerdown', camDown);
-  dom.addEventListener('pointermove', camMove);
-  dom.addEventListener('pointerup', camUp);
-  dom.addEventListener('pointercancel', camUp);
-  const onWheel = (e) => { camDist = Math.max(5, Math.min(15, camDist + e.deltaY * 0.01)); e.preventDefault(); };
-  dom.addEventListener('wheel', onWheel, { passive: false });
+  const orbitCam = createOrbitCamera(renderer.domElement, {
+    yaw: 0, elev: 0.42, dist: TILE * 4.0,
+    minDist: TILE * 2.2, maxDist: TILE * 9, minElev: 0.18, maxElev: 0.95,
+    pinch: 0.06, wheel: 0.05,
+  });
+  const cam = orbitCam.cam;
 
   // ── Guard barrier / proximity / gate ─────────────────────
-  const guardX0 = guard.group.position.x, guardZ = guard.group.position.z;
-  const barrierZ = guardZ + 1.5;        // player can't pass the guard until the gate opens
-  let gateOpen = false, gt = 0;          // gate-open animation timer
+  const barrierZ = guardZ0 + TILE * 0.7;   // player can't pass until the gate opens
+  let gateOpen = false, gt = 0;            // gate-open animation timer
   let atGuard = false, doneFired = false, phase = 0;
-  const camTarget = new THREE.Vector3(), tmp = new THREE.Vector3();
+  const camTarget = new THREE.Vector3(), tmp = new THREE.Vector3(), camPos = new THREE.Vector3();
 
   let raf = 0, running = true, last = performance.now();
 
   function frame(now) {
     if (!running) return;
-    const dt = Math.min(.05, (now - last) / 1000); last = now;
+    const dt = Math.min(0.05, (now - last) / 1000); last = now;
     const t = now / 1000;
 
     // ambient life
     byStanders.forEach((b) => {
-      b.c.group.rotation.y += Math.sin(t * .6 + b.ph) * .003;
-      b.c.parts.torso.position.y = 1.05 + Math.sin(t * 1.2 + b.ph) * .02;
+      b.c.group.rotation.y += Math.sin(t * 0.6 + b.ph) * 0.003;
+      b.c.parts.torso.position.y = 1.05 + Math.sin(t * 1.2 + b.ph) * 0.02;
     });
-    flames.forEach((f, i) => { const s = 1 + Math.sin(t * 9 + i) * .12; f.scale.set(s, s + .1, s); });
-    arch.rotation.z = Math.sin(t * .5) * .03;
-    if (!gateOpen) guard.parts.head.rotation.y = Math.sin(t * .5) * .2;
+    if (!gateOpen) guard.parts.head.rotation.y = Math.sin(t * 0.5) * 0.2;
 
     // ── input → movement (relative to camera yaw) ──
     let ix = 0, iz = 0;
@@ -289,24 +348,24 @@ export function createVeyraGate(container, opts) {
     if (keys['a'] || keys['arrowleft']) ix -= 1;
     if (keys['d'] || keys['arrowright']) ix += 1;
     ix += joy.x; iz += joy.y;
-    let mag = Math.hypot(ix, iz); const moving = mag > 0.08;
+    let mag = Math.hypot(ix, iz); const moving = started && mag > 0.08;
     if (mag > 1) { ix /= mag; iz /= mag; mag = 1; }
 
     if (moving) {
-      const fwdX = -Math.sin(camYaw), fwdZ = -Math.cos(camYaw);
-      const rgtX = Math.cos(camYaw), rgtZ = -Math.sin(camYaw);
+      const fwdX = -Math.sin(cam.yaw), fwdZ = -Math.cos(cam.yaw);
+      const rgtX = Math.cos(cam.yaw), rgtZ = -Math.sin(cam.yaw);
       const mvx = rgtX * ix + fwdX * (-iz);
       const mvz = rgtZ * ix + fwdZ * (-iz);
       const p = player.group.position;
       p.x += mvx * SPEED * dt;
       p.z += mvz * SPEED * dt;
       // play area
-      p.x = Math.max(-8.5, Math.min(8.5, p.x));
-      p.z = Math.min(15, p.z);
+      p.x = Math.max(-PLAY_HALF_X, Math.min(PLAY_HALF_X, p.x));
+      p.z = Math.min(PLAY_MAX_Z, p.z);
       // invisible barrier across the opening until the guard lets you in
       if (!gateOpen && p.z < barrierZ) p.z = barrierZ;
-      // funnel through the doorway when crossing the wall
-      if (p.z < GZ + 1.6) p.x = Math.max(-2.2, Math.min(2.2, p.x));
+      // funnel through the doorway when crossing the gateway plane
+      if (p.z < GZ + TILE * 0.5) p.x = Math.max(-PATH_HALF, Math.min(PATH_HALF, p.x));
       // face direction of travel
       const targetRot = Math.atan2(mvx, mvz);
       let diff = ((targetRot - player.group.rotation.y + Math.PI) % (Math.PI * 2)) - Math.PI;
@@ -323,33 +382,39 @@ export function createVeyraGate(container, opts) {
     ease(player.parts.armL, -Math.sin(phase) * swing * 0.7);
     ease(player.parts.armR, Math.sin(phase) * swing * 0.7);
     player.parts.torso.position.y = 1.05 + (moving ? Math.abs(Math.sin(phase)) * 0.04 : Math.sin(t * 1.4) * 0.015);
-    blob.position.set(player.group.position.x, .04, player.group.position.z);
+    blob.position.set(player.group.position.x, 0.05, player.group.position.z);
 
     // ── proximity to guard ──
-    const gd = Math.hypot(player.group.position.x - guard.group.position.x, player.group.position.z - guardZ);
-    const nowAt = gd < 3.0;
+    const gd = Math.hypot(player.group.position.x - guard.group.position.x, player.group.position.z - guardZ0);
+    const nowAt = gd < TILE * 0.55;   // ~3m at CITY_SCALE=7 (avatars are ~1m units)
     if (nowAt !== atGuard) { atGuard = nowAt; opts.onProximity && opts.onProximity(atGuard); }
 
-    // ── gate opening: doors swing, guard steps aside, barrier drops ──
+    // ── gate opening: barriers slide aside, guard steps aside, barrier drops ──
     if (gateOpen) {
       gt += dt;
       const dOpen = sstep(0, 1.3, gt);
-      doorL.rotation.y = dOpen * 2.0; doorR.rotation.y = -dOpen * 2.0;
+      barriers.forEach((b) => {
+        // rotate the leaf outward + slide it toward the sidewalk
+        b.group.rotation.y = b.side * dOpen * 1.4;
+        b.group.position.x = b.x0 + b.side * dOpen * TILE * 0.9;
+      });
       const ga = sstep(0, 0.7, gt);
-      guard.group.position.x = guardX0 - ga * 3.0;
-      guard.parts.armR.rotation.x = -ga * 1.6; staff.rotation.z = -ga * 0.5;
+      guard.group.position.x = guardX0 - ga * TILE * 0.7;
+      guardBlob.position.x = guardX0 - ga * TILE * 0.7;
+      guard.parts.armR.rotation.x = -ga * 1.6;
       // the player walks through on their own — fire once they cross the threshold
-      if (!doneFired && player.group.position.z < GZ - 0.4) { doneFired = true; opts.onEnter && opts.onEnter(); }
+      if (!doneFired && player.group.position.z < GZ - TILE * 0.2) { doneFired = true; opts.onEnter && opts.onEnter(); }
     }
 
     // ── third-person camera follow ──
-    const offX = camDist * Math.cos(camElev) * Math.sin(camYaw);
-    const offZ = camDist * Math.cos(camElev) * Math.cos(camYaw);
-    const offY = camDist * Math.sin(camElev);
-    camTarget.set(player.group.position.x + offX, 1.2 + offY, player.group.position.z + offZ);
+    const offX = cam.dist * Math.cos(cam.elev) * Math.sin(cam.yaw);
+    const offZ = cam.dist * Math.cos(cam.elev) * Math.cos(cam.yaw);
+    const offY = cam.dist * Math.sin(cam.elev);
+    camTarget.set(player.group.position.x + offX, TILE * 0.3 + offY, player.group.position.z + offZ);
     camera.position.lerp(camTarget, Math.min(1, dt * 6));
-    tmp.set(player.group.position.x, 1.3, player.group.position.z);
+    tmp.set(player.group.position.x, TILE * 0.32, player.group.position.z);
     camera.lookAt(tmp);
+    camPos.copy(camera.position);
 
     renderer.render(scene, camera);
     raf = requestAnimationFrame(frame);
@@ -357,12 +422,12 @@ export function createVeyraGate(container, opts) {
   raf = requestAnimationFrame(frame);
 
   const ro = new ResizeObserver(() => {
-    camera.aspect = W() / H(); camera.updateProjectionMatrix(); renderer.setSize(W(), H());
+    camera.aspect = W() / H(); camera.updateProjectionMatrix();
+    renderer.setSize(W(), H());
   });
   ro.observe(container);
 
   // Pause rendering while the tab is hidden (saves battery on mobile).
-  let disposed = false;
   const onVisibility = () => {
     if (disposed) return;
     if (document.hidden) { running = false; cancelAnimationFrame(raf); }
@@ -376,14 +441,15 @@ export function createVeyraGate(container, opts) {
     dispose() {
       disposed = true; running = false; cancelAnimationFrame(raf); ro.disconnect();
       document.removeEventListener('visibilitychange', onVisibility);
-      window.removeEventListener('keydown', kd); window.removeEventListener('keyup', ku);
-      dom.removeEventListener('pointerdown', camDown); dom.removeEventListener('pointermove', camMove);
-      dom.removeEventListener('pointerup', camUp); dom.removeEventListener('pointercancel', camUp);
-      dom.removeEventListener('wheel', onWheel);
+      kbd.dispose(); stick.dispose(); orbitCam.dispose();
+      // Scene clones share geometry/material with the kit cache: dispose the scene
+      // first to free those GPU resources, then kit.dispose() clears the cache map.
+      disposeScene(scene);
+      kit.dispose();
+      envRT.dispose();
+      pmrem.dispose();
       renderer.dispose();
-      scene.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => { if (m.map) m.map.dispose(); m.dispose(); }); });
       if (renderer.domElement.parentNode) renderer.domElement.parentNode.removeChild(renderer.domElement);
-      if (base.parentNode) base.parentNode.removeChild(base);
     },
   };
-};
+}

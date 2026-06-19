@@ -5,10 +5,9 @@ import type { Game, WorldPanel } from '../../lib/game/types';
 
 /** Floating quests/cart panel layered over the live 3D world. */
 export function DiegeticPanel({ g, type }: { g: Game; type: WorldPanel }) {
-  const vi = g.lang === 'vi';
   const meta = type === 'quests'
-    ? { icon: 'quest', title: g.t('rewards'), sub: vi ? 'Bảng nhiệm vụ · Veyra Plaza' : 'Quest board · Veyra Plaza' }
-    : { icon: 'cart', title: g.t('cart'), sub: vi ? 'Quầy giao dịch · Veyra Plaza' : 'Trade counter · Veyra Plaza' };
+    ? { icon: 'quest', title: g.t('rewards'), sub: g.t('questBoardLoc') }
+    : { icon: 'cart', title: g.t('cart'), sub: g.t('tradeCounterLoc') };
   return (
     <div className="v-overlay v-overlay-dgt" onClick={g.closeWorldPanel}>
       <div className="v-dgt" onClick={(e) => e.stopPropagation()}>
@@ -18,7 +17,7 @@ export function DiegeticPanel({ g, type }: { g: Game; type: WorldPanel }) {
             <div className="v-dgt-title">{meta.title}</div>
             <div className="v-mono v-dgt-sub">{meta.sub}</div>
           </div>
-          <button className="v-iconbtn" onClick={g.closeWorldPanel}><Ic name="close" size={18} /></button>
+          <button className="v-iconbtn" onClick={g.closeWorldPanel} aria-label={g.t('aClose')}><Ic name="close" size={18} /></button>
         </div>
         <div className="v-dgt-body">
           {type === 'quests' ? <QuestsScreen g={g} embed /> : <CartScreen g={g} embed />}

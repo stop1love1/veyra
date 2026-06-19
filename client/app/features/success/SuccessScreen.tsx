@@ -14,7 +14,7 @@ export function SuccessScreen({ g }: { g: Game }) {
         <p className="v-success-sub">{g.t('orderDoneSub')}</p>
         <div className="v-success-reward">
           <Coin value={120} size="sm" />
-          <span className="v-reward-badge"><Ic name="shield" size={16} /> {g.lang === 'vi' ? 'Người mua mới' : 'First buyer'}</span>
+          <span className="v-reward-badge"><Ic name="shield" size={16} /> {g.t('firstBuyer')}</span>
         </div>
       </div>
       <div className="v-splash-actions">

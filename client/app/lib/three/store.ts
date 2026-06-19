@@ -1,11 +1,25 @@
 // @ts-nocheck -- ported vanilla three.js engine; internals intentionally untyped
 // store.ts — Veyra walkable 3D shop interior (three.js ES module).
 // createVeyraStore(container, opts) -> { dispose }
-// opts: { shopHue, look:{hue,skin,style}, products:[{id,name,price,color}], npc:{name,hue},
-//         labels:{exit}, onProximity(poi|null), onExit() }
+// opts: { shopHue, lang, labels:{advisor}, look:{hue,skin,style},
+//         npc:{name,hue}, products:[{id,name,price,color}], onProximity(poi|null) }
+//
+// LOW-POLY re-skin: a clean, cohesive Kenney-kit style BOUTIQUE interior, to
+// match the rebuilt low-poly world. The realistic PBR material library is gone;
+// surfaces are now SIMPLE FLAT solid-color MeshStandardMaterials in a tasteful
+// muted palette tinted by shopHue. Soft image-based lighting still comes from
+// RoomEnvironment → PMREM (works for low-poly too) plus simple ceiling fills /
+// hemi / ambient + ACES tonemap + subtle post (composer). This is the INDOOR
+// counterpart to world.ts; it does NOT use the outdoor Sky/sun environment.
 
 import * as THREE from 'three';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { hsl } from './shared/helpers';
 import { buildAvatar } from './shared/avatar';
+import { createKeyboard, createJoystick, createOrbitCamera } from './shared/controls';
+import { disposeScene } from './shared/dispose';
+import { detectQuality, applyQualityToRenderer } from './shared/quality';
+import { createComposer } from './shared/postfx';
 
 export function createVeyraStore(container, opts) {
   opts = opts || {};
@@ -17,225 +31,416 @@ export function createVeyraStore(container, opts) {
 
   const W = () => container.clientWidth || 390;
   const H = () => container.clientHeight || 700;
-  const hsl = (h, s, l) => new THREE.Color().setHSL(h / 360, s, l);
 
-  // ── Renderer / scene ─────────────────────────────────────
-  const renderer = new THREE.WebGLRenderer({ antialias: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  // ── Quality tier ─────────────────────────────────────────
+  // Pre-detect (no renderer) to choose construction flags; refine after.
+  let q = detectQuality();
+
+  // ── Renderer ─────────────────────────────────────────────
+  // When post runs, FXAA handles AA so MSAA is off; otherwise enable it.
+  const renderer = new THREE.WebGLRenderer({ antialias: !q.enablePost, powerPreference: 'high-performance' });
+  q = detectQuality(renderer); // refine with real GL caps
+  applyQualityToRenderer(renderer, q);
   renderer.setSize(W(), H());
-  renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 0.95;
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.domElement.style.display = 'block';
   renderer.domElement.style.touchAction = 'none';
   container.appendChild(renderer.domElement);
 
+  // ── Scene + camera ───────────────────────────────────────
   const scene = new THREE.Scene();
-  const wallTint = hsl(shopHue, .18, .16);
-  scene.background = wallTint.clone();
-  scene.fog = new THREE.Fog(wallTint.clone(), 18, 34);
+  // Interior: no distance fog / flat background tint. A faint, neutral fog
+  // keeps far corners from reading as a hard cutoff without tinting the room.
+  scene.fog = new THREE.Fog(0x20242a, 30, 70);
 
   const camera = new THREE.PerspectiveCamera(48, W() / H(), 0.1, 120);
   camera.position.set(0, 8, 12);
 
-  // ── Lights (warm interior) ───────────────────────────────
-  scene.add(new THREE.HemisphereLight('#fff1de', '#3a4f4c', .9));
-  scene.add(new THREE.AmbientLight('#e9ddc8', .4));
-  const key = new THREE.DirectionalLight('#fff4e2', .85);
-  key.position.set(6, 14, 8); key.castShadow = true;
-  key.shadow.mapSize.set(1024, 1024);
-  const sd = 14; key.shadow.camera.left = -sd; key.shadow.camera.right = sd;
-  key.shadow.camera.top = sd; key.shadow.camera.bottom = -sd; key.shadow.camera.far = 50; key.shadow.bias = -.0004;
-  scene.add(key);
-  // ceiling glow lamps
-  [-4, 4].forEach(lx => {
-    const lamp = new THREE.Mesh(new THREE.CylinderGeometry(.7, .8, .25, 16),
-      new THREE.MeshStandardMaterial({ color: '#fff6e6', emissive: '#ffe9c2', emissiveIntensity: .9 }));
-    lamp.position.set(lx, 6.4, -1); scene.add(lamp);
-    const pl = new THREE.PointLight(hsl(shopHue, .3, .7), .5, 22); pl.position.set(lx, 6, -1); scene.add(pl);
+  // ── Interior IBL (RoomEnvironment → PMREM) ───────────────
+  // Gives realistic soft reflections on glass / metal and even fill light.
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  let roomEnv;
+  try { roomEnv = new RoomEnvironment(renderer); } catch (_) { roomEnv = new RoomEnvironment(); }
+  const envRT = pmrem.fromScene(roomEnv, 0.04);
+  scene.environment = envRT.texture;
+  roomEnv.dispose && roomEnv.dispose();
+
+  // ── Low-poly material kit ────────────────────────────────
+  // Flat solid-color MeshStandardMaterials (no procedural textures, no glass).
+  // Soft IBL still comes from scene.environment. We track every material so
+  // dispose() can free them (no shared library to call mats.dispose() on now).
+  const ownMats = [];
+  const M = (m) => { ownMats.push(m); return m; };
+  // chunky forms get flatShading for that faceted Kenney look; smooth where the
+  // garment forms need to read cleanly under the inspector.
+  const lp = (color, { rough = 0.85, metal = 0, flat = false, emissive, emissiveIntensity } = {}) => M(
+    new THREE.MeshStandardMaterial({
+      color: new THREE.Color(color), roughness: rough, metalness: metal,
+      flatShading: flat,
+      ...(emissive != null ? { emissive: new THREE.Color(emissive), emissiveIntensity: emissiveIntensity ?? 1 } : {}),
+    }),
+  );
+
+  // Muted palette tinted by shopHue (kept low-saturation for a tasteful look).
+  const matFloor = lp(hsl(shopHue, 0.06, 0.42), { rough: 0.95, flat: true });
+  const matRug = lp(hsl(shopHue, 0.18, 0.4), { rough: 0.95 });
+  const matWall = lp(hsl(shopHue, 0.1, 0.72), { rough: 0.95, flat: true });
+  const matCeil = lp(hsl(38, 0.08, 0.9), { rough: 1, flat: true });
+  const matFrame = lp(hsl(shopHue, 0.12, 0.32), { rough: 0.6, metal: 0.3, flat: true });
+  const matAccent = lp(hsl(shopHue, 0.32, 0.55), { rough: 0.7, flat: true });
+  const matPlinth = lp(hsl(shopHue, 0.08, 0.66), { rough: 0.85, flat: true });
+  const matPlinthTop = lp(hsl(shopHue, 0.05, 0.8), { rough: 0.8, flat: true });
+  const matPanel = lp(0xfff6e8, { rough: 0.5, emissive: 0xffe7c0, emissiveIntensity: 0.75 });
+  const matLeaf = lp(hsl(130, 0.4, 0.42), { rough: 1, flat: true });
+  const matPot = lp(hsl(20, 0.4, 0.45), { rough: 0.95, flat: true });
+
+  // ── Post-processing composer (adaptive) ──────────────────
+  const post = createComposer(renderer, scene, camera, { quality: q });
+
+  // ── Interior lighting (calm boutique, not a stage) ───────
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x3a3d42, 0.55));
+  scene.add(new THREE.AmbientLight(0xffffff, 0.22));
+
+  // Warm ceiling key/fills (PointLights). One casts shadows when allowed.
+  // Spread across the (now larger) ceiling; moderate intensity so the room
+  // reads softly lit, not blown out.
+  const ceilLights = [];
+  const lampPositions = [[-5.5, 4.5, -5.5], [5.5, 4.5, -5.5], [-5.5, 4.5, 2.5], [5.5, 4.5, 2.5], [0, 4.5, -1.5]];
+  lampPositions.forEach(([lx, ly, lz], i) => {
+    const pl = new THREE.PointLight(0xfff2dc, 20, 36, 2.0);
+    pl.position.set(lx, ly, lz);
+    if (i === 0 && q.shadowMapSize > 0) {
+      pl.castShadow = true;
+      pl.shadow.mapSize.set(q.shadowMapSize, q.shadowMapSize);
+      pl.shadow.camera.near = 0.4; pl.shadow.camera.far = 24; pl.shadow.bias = -0.0006;
+    }
+    scene.add(pl);
+    ceilLights.push(pl);
   });
 
-  // ── Room shell ───────────────────────────────────────────
-  const RX = 6.6, RZ = 7;
-  const floorMat = new THREE.MeshStandardMaterial({ color: hsl(shopHue, .12, .34), roughness: .9 });
-  const floor = new THREE.Mesh(new THREE.BoxGeometry(RX * 2, .4, RZ * 2 + 1), floorMat);
-  floor.position.set(0, -.2, 0); floor.receiveShadow = true; scene.add(floor);
-  // rug
-  const rug = new THREE.Mesh(new THREE.CylinderGeometry(2.3, 2.3, .06, 36),
-    new THREE.MeshStandardMaterial({ color: hsl(shopHue, .4, .5), roughness: .8 }));
-  rug.position.set(0, .03, -1.5); rug.receiveShadow = true; scene.add(rug);
-  const rugRing = new THREE.Mesh(new THREE.TorusGeometry(2.0, .06, 8, 48),
-    new THREE.MeshStandardMaterial({ color: '#eafcf8', roughness: .7 }));
-  rugRing.rotation.x = -Math.PI / 2; rugRing.position.set(0, .07, -1.5); scene.add(rugRing);
+  // ── Room shell (flat-colored low-poly surfaces) ──────────
+  const RX = 10.5, RZ = 11.5, wallH = 5.0;
 
-  const wallMat = new THREE.MeshStandardMaterial({ color: hsl(shopHue, .16, .26), roughness: .95 });
-  const wallH = 6.6;
+  // Floor: flat solid slab.
+  const floor = new THREE.Mesh(new THREE.BoxGeometry(RX * 2, 0.4, RZ * 2 + 1), matFloor);
+  floor.position.set(0, -0.2, 0); floor.receiveShadow = true; scene.add(floor);
+
+  // Subtle accent rug under the central display zone.
+  const rug = new THREE.Mesh(new THREE.CylinderGeometry(2.3, 2.3, 0.04, 32), matRug);
+  rug.position.set(0, 0.03, -1.5); rug.receiveShadow = true; scene.add(rug);
+
+  // Walls: flat muted color tinted by shopHue.
   function wall(x, z, w, rotY) {
-    const m = new THREE.Mesh(new THREE.BoxGeometry(w, wallH, .3), wallMat);
-    m.position.set(x, wallH / 2 - .2, z); m.rotation.y = rotY; m.receiveShadow = true; scene.add(m);
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, wallH, 0.3), matWall);
+    m.position.set(x, wallH / 2 - 0.2, z); m.rotation.y = rotY; m.receiveShadow = true; scene.add(m);
     return m;
   }
   wall(0, -RZ, RX * 2, 0);            // back
   wall(-RX, 0, RZ * 2, Math.PI / 2);  // left
   wall(RX, 0, RZ * 2, Math.PI / 2);   // right
-  // front wall split for the exit doorway
-  wall(-(RX / 2 + .8), RZ, RX - 1.6, 0);
-  wall((RX / 2 + .8), RZ, RX - 1.6, 0);
-  // ceiling
-  const ceil = new THREE.Mesh(new THREE.BoxGeometry(RX * 2, .3, RZ * 2 + 1),
-    new THREE.MeshStandardMaterial({ color: hsl(shopHue, .14, .2), roughness: 1 }));
-  ceil.position.set(0, wallH - .2, 0); scene.add(ceil);
 
-  // back-wall sign (canvas)
-  function roundRect(c, x, y, w, h, r) { c.beginPath(); c.moveTo(x + r, y); c.arcTo(x + w, y, x + w, y + h, r); c.arcTo(x + w, y + h, x, y + h, r); c.arcTo(x, y + h, x, y, r); c.arcTo(x, y, x + w, y, r); c.closePath(); }
+  // Ceiling: flat warm off-white slab.
+  const ceil = new THREE.Mesh(new THREE.BoxGeometry(RX * 2, 0.3, RZ * 2 + 1), matCeil);
+  ceil.position.set(0, wallH - 0.2, 0); scene.add(ceil);
 
-  // ── Exit portal (front doorway) ──────────────────────────
-  const portal = new THREE.Group(); portal.position.set(0, 0, RZ - .1);
-  const arch = new THREE.Mesh(new THREE.TorusGeometry(1.3, .13, 10, 28, Math.PI),
-    new THREE.MeshBasicMaterial({ color: hsl(shopHue, .6, .6) }));
-  arch.position.y = 3.1; portal.add(arch);
-  [-1.3, 1.3].forEach(px => { const p = new THREE.Mesh(new THREE.CylinderGeometry(.13, .13, 3.2, 10), new THREE.MeshBasicMaterial({ color: hsl(shopHue, .55, .55) })); p.position.set(px, 1.55, 0); portal.add(p); });
-  const glow = new THREE.Mesh(new THREE.PlaneGeometry(2.4, 3.1), new THREE.MeshBasicMaterial({ color: hsl(shopHue, .5, .7), transparent: true, opacity: .16 }));
-  glow.position.set(0, 1.7, .05); portal.add(glow);
-  scene.add(portal);
+  // Simple low-poly ceiling fixtures: a flat housing box + an emissive panel
+  // face beneath each lamp position (bloom still kisses them).
+  lampPositions.forEach(([lx, , lz]) => {
+    const housing = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.16, 1.5), matFrame);
+    housing.position.set(lx, wallH - 0.36, lz); scene.add(housing);
+    const panel = new THREE.Mesh(new THREE.PlaneGeometry(1.24, 1.24), matPanel);
+    panel.rotation.x = Math.PI / 2; panel.position.set(lx, wallH - 0.44, lz); scene.add(panel);
+  });
 
-  // potted plants in back corners
+  // ── Front wall + simple low-poly exit doorframe ──────────
+  // Flat front wall on either side of the doorway gap (gap ~ x in [-1.5, 1.5]),
+  // plus a header beam — clean boxes instead of the glass shopfront.
+  const FRONT_Z = RZ;
+  function frontPanel(x, w) {
+    const g = new THREE.Mesh(new THREE.BoxGeometry(w, wallH, 0.3), matWall);
+    g.position.set(x, wallH / 2 - 0.2, FRONT_Z); g.receiveShadow = true; scene.add(g);
+  }
+  const GAP = 1.5;
+  frontPanel(-(RX / 2 + GAP / 2), RX - GAP);
+  frontPanel((RX / 2 + GAP / 2), RX - GAP);
+  // header beam across the top of the doorway opening
+  const header = new THREE.Mesh(new THREE.BoxGeometry(RX * 2, 0.6, 0.34), matWall);
+  header.position.set(0, wallH - 0.5, FRONT_Z); header.receiveShadow = true; scene.add(header);
+
+  // Low-poly exit doorframe: two jambs + a lintel framing the opening.
+  const door = new THREE.Group(); door.position.set(0, 0, FRONT_Z);
+  [-1.45, 1.45].forEach((jx) => {
+    const jamb = new THREE.Mesh(new THREE.BoxGeometry(0.34, 4.2, 0.4), matFrame);
+    jamb.position.set(jx, 1.9, 0); jamb.castShadow = true; door.add(jamb);
+  });
+  const lintel = new THREE.Mesh(new THREE.BoxGeometry(3.3, 0.4, 0.4), matFrame);
+  lintel.position.set(0, 3.95, 0); lintel.castShadow = true; door.add(lintel);
+  // accent threshold strip so the exit reads as a doorway
+  const sill = new THREE.Mesh(new THREE.BoxGeometry(3.0, 0.08, 0.5), matAccent);
+  sill.position.set(0, 0.04, 0); door.add(sill);
+  // invisible gap marker (kept for parity with the prior portal hit-area)
+  const doorGap = new THREE.Mesh(new THREE.BoxGeometry(2.6, 3.9, 0.16), M(new THREE.MeshBasicMaterial({ visible: false })));
+  doorGap.position.set(0, 1.85, 0); door.add(doorGap);
+  scene.add(door);
+
+  // Simple low-poly brand sign on the back wall: a flat accent plaque.
+  const brandSign = new THREE.Mesh(new THREE.BoxGeometry(4.0, 0.9, 0.12), matAccent);
+  brandSign.position.set(0, wallH - 0.7, -RZ + 0.22); scene.add(brandSign);
+
+  // Low-poly potted plants in the back corners (chunky pot + faceted foliage).
+  function lowPolyPlant() {
+    const g = new THREE.Group();
+    const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.32, 0.6, 8), matPot);
+    pot.position.y = 0.3; pot.castShadow = true; g.add(pot);
+    const foliage = new THREE.Mesh(new THREE.IcosahedronGeometry(0.7, 0), matLeaf);
+    foliage.position.y = 1.15; foliage.castShadow = true; g.add(foliage);
+    return g;
+  }
   [[-RX + 1, -RZ + 1], [RX - 1, -RZ + 1]].forEach(([px, pz]) => {
-    const pg = new THREE.Group(); pg.position.set(px, 0, pz);
-    const pot = new THREE.Mesh(new THREE.CylinderGeometry(.4, .3, .6, 12), new THREE.MeshStandardMaterial({ color: '#b98a55', roughness: .9 }));
-    pot.position.y = .3; pot.castShadow = true; pg.add(pot);
-    const leafM = new THREE.MeshStandardMaterial({ color: hsl(140, .35, .45), roughness: 1 });
-    [[0, 1.1, .55], [.3, 1.5, .42], [-.28, 1.45, .4]].forEach(([dx, dy, r]) => { const m = new THREE.Mesh(new THREE.IcosahedronGeometry(r, 0), leafM); m.position.set(dx, dy, 0); m.castShadow = true; pg.add(m); });
-    scene.add(pg);
+    const pl = lowPolyPlant();
+    pl.position.set(px, 0, pz); pl.scale.set(1.2, 1.2, 1.2); scene.add(pl);
   });
 
   // ── Billboard label helper ───────────────────────────────
+  function roundRect(c, x, y, w, h, r) {
+    c.beginPath(); c.moveTo(x + r, y);
+    c.arcTo(x + w, y, x + w, y + h, r); c.arcTo(x + w, y + h, x, y + h, r);
+    c.arcTo(x, y + h, x, y, r); c.arcTo(x, y, x + w, y, r); c.closePath();
+  }
   const labels = [];
   function makeLabel(title, sub, w) {
     const cv = document.createElement('canvas'); cv.width = 300; cv.height = 104;
     const c = cv.getContext('2d');
-    c.fillStyle = 'rgba(12,30,30,.84)'; roundRect(c, 4, 4, 292, 96, 22); c.fill();
+    c.fillStyle = 'rgba(18,20,24,.86)'; roundRect(c, 4, 4, 292, 96, 22); c.fill();
     c.textAlign = 'center'; c.textBaseline = 'middle';
-    c.fillStyle = '#eafcf8'; c.font = '600 30px "Be Vietnam Pro", system-ui, sans-serif';
-    let tt = title.length > 16 ? title.slice(0, 15) + '…' : title;
+    c.fillStyle = '#f2efe9'; c.font = '600 30px "Be Vietnam Pro", system-ui, sans-serif';
+    const tt = title.length > 16 ? title.slice(0, 15) + '…' : title;
     c.fillText(tt, 150, 40);
-    if (sub) { c.fillStyle = '#8fe3d4'; c.font = '700 26px "Space Mono", monospace'; c.fillText(sub, 150, 76); }
-    const tex = new THREE.CanvasTexture(cv); tex.anisotropy = 4;
+    if (sub) { c.fillStyle = '#cbb89a'; c.font = '700 26px "Space Mono", monospace'; c.fillText(sub, 150, 76); }
+    const tex = new THREE.CanvasTexture(cv); tex.anisotropy = 4; tex.colorSpace = THREE.SRGBColorSpace;
     const ww = w || 2.0;
     const m = new THREE.Mesh(new THREE.PlaneGeometry(ww, ww * 104 / 300), new THREE.MeshBasicMaterial({ map: tex, transparent: true }));
     labels.push(m); return m;
   }
 
+  // Flat low-poly tag marker (gently emissive so it pops, not neon).
+  const markerMat = lp(0xffffff, { rough: 0.5, emissive: hsl(shopHue, 0.4, 0.5), emissiveIntensity: 0.55 });
+
   // ── Player (shared avatar builder) ───────────────────────
   const player = buildAvatar({ hue: look.hue, skinColor: SKINS[look.skin], style: look.style });
-  player.group.position.set(0, 0, RZ - 2.2);
-  player.group.rotation.y = Math.PI; // face into room (-z)
+  player.group.position.set(0, 0, 1.5);   // mid-room so the camera stays inside
+  player.group.rotation.y = Math.PI; // face into room (−z, toward the advisor)
   scene.add(player.group);
-  const blob = new THREE.Mesh(new THREE.CircleGeometry(.5, 20), new THREE.MeshBasicMaterial({ color: '#0c2220', transparent: true, opacity: .28 }));
-  blob.rotation.x = -Math.PI / 2; blob.position.y = .08; scene.add(blob);
+  const blob = new THREE.Mesh(new THREE.CircleGeometry(0.5, 20), new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.24 }));
+  blob.rotation.x = -Math.PI / 2; blob.position.y = 0.05; scene.add(blob);
 
   // ── NPC stylist (back center) ────────────────────────────
   const npc = buildAvatar({ hue: npcInfo.hue, skinColor: SKINS[2], style: 'minimal' });
   npc.group.position.set(0, 0, -RZ + 1.8);
+  npc.group.traverse((o) => { if (o.isMesh) o.castShadow = true; });
   scene.add(npc.group);
   const npcLabel = makeLabel(npcInfo.name, (opts.labels && opts.labels.advisor) || (opts.lang === 'en' ? 'Advisor' : 'Tư vấn'), 1.9);
   npcLabel.position.set(0, 2.5, -RZ + 1.8); scene.add(npcLabel);
-  const npcMarker = new THREE.Mesh(new THREE.TorusGeometry(.42, .07, 8, 20), new THREE.MeshBasicMaterial({ color: hsl(npcInfo.hue, .7, .6) }));
+  const npcMarker = new THREE.Mesh(new THREE.TorusGeometry(0.42, 0.06, 10, 24), markerMat);
   npcMarker.position.set(0, 3.15, -RZ + 1.8); scene.add(npcMarker);
 
   // ── Product displays ─────────────────────────────────────
-  const pois = [{ id: '__exit', type: 'exit', pos: new THREE.Vector3(0, 0, RZ - .4), trig: 2.0 },
-                { id: '__npc', type: 'npc', pos: new THREE.Vector3(0, 0, -RZ + 1.8), trig: 2.4 }];
+  const pois = [
+    { id: '__exit', type: 'exit', pos: new THREE.Vector3(0, 0, RZ - 0.4), trig: 2.0 },
+    { id: '__npc', type: 'npc', pos: new THREE.Vector3(0, 0, -RZ + 1.8), trig: 2.4 },
+  ];
   const markers = [npcMarker];
+  // Map of product id -> { group, form, formMat, pedestalPos, baseRot } so the
+  // inspect API can find, lift, spin and retint the focused garment form.
+  const productById = {};
   const slots = [
-    [-2.9, -4.2], [2.9, -4.2],
-    [-2.9, -1.4], [2.9, -1.4],
-    [-2.9, 1.4], [2.9, 1.4],
+    [-6.8, -6.5], [6.8, -6.5],
+    [-6.8, -1.5], [6.8, -1.5],
+    [-6.8, 3.5], [6.8, 3.5],
   ];
   products.slice(0, 6).forEach((p, i) => {
-    const [x, z] = slots[i]; const side = x < 0 ? 1 : -1;
+    const [x, z] = slots[i];
     const g = new THREE.Group(); g.position.set(x, 0, z);
-    // pedestal
-    const ped = new THREE.Mesh(new THREE.CylinderGeometry(.7, .8, 1, 18),
-      new THREE.MeshStandardMaterial({ color: '#eee7d8', roughness: .7 }));
-    ped.position.y = .5; ped.castShadow = true; ped.receiveShadow = true; g.add(ped);
-    const top = new THREE.Mesh(new THREE.CylinderGeometry(.74, .74, .12, 18),
-      new THREE.MeshStandardMaterial({ color: hsl(shopHue, .4, .55), roughness: .5 }));
-    top.position.y = 1.06; g.add(top);
-    // garment form (dress/torso) tinted to product color
+    // Low-poly stand: a faceted plinth box-cylinder with a flat cap.
+    const ped = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 0.78, 1.0, 8), matPlinth);
+    ped.position.y = 0.5; ped.castShadow = true; ped.receiveShadow = true; g.add(ped);
+    const top = new THREE.Mesh(new THREE.CylinderGeometry(0.74, 0.74, 0.12, 8), matPlinthTop);
+    top.position.y = 1.06; top.castShadow = true; g.add(top);
+    // Garment "form": a small sub-group so inspect can lift + spin it as a unit
+    // (drag-to-spin rotates this group; the pedestal stays put).
+    const form = new THREE.Group();
+    form.position.y = 0; // baseline; inspect lifts via form.position.y
+    g.add(form);
+    // Garment tinted to product color — its OWN material instance so
+    // setInspectColor retint never bleeds across products. (tracked for dispose)
     const col = new THREE.Color(p.color || '#cfd8d2');
-    const formMat = new THREE.MeshStandardMaterial({ color: col, roughness: .75 });
-    const body = new THREE.Mesh(new THREE.CylinderGeometry(.28, .52, 1.2, 14), formMat);
-    body.position.y = 1.85; body.castShadow = true; g.add(body);
-    const shoulder = new THREE.Mesh(new THREE.SphereGeometry(.3, 14, 12), formMat); shoulder.position.y = 2.4; shoulder.scale.set(1, .7, 1); g.add(shoulder);
-    const neck = new THREE.Mesh(new THREE.CylinderGeometry(.07, .07, .2, 8), new THREE.MeshStandardMaterial({ color: '#c9b79c', roughness: .8 })); neck.position.y = 2.62; g.add(neck);
-    // marker
-    const mk = new THREE.Mesh(new THREE.TorusGeometry(.4, .06, 8, 20), new THREE.MeshBasicMaterial({ color: hsl(shopHue, .7, .62) }));
+    const formMat = M(new THREE.MeshStandardMaterial({ color: col, roughness: 0.7, metalness: 0.0 }));
+    const body = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.52, 1.2, 12), formMat);
+    body.position.y = 1.85; body.castShadow = true; form.add(body);
+    const shoulder = new THREE.Mesh(new THREE.SphereGeometry(0.3, 12, 8), formMat);
+    shoulder.position.y = 2.4; shoulder.scale.set(1, 0.7, 1); shoulder.castShadow = true; form.add(shoulder);
+    const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.2, 8), matPlinthTop);
+    neck.position.y = 2.62; form.add(neck);
+    // Subtle neutral metal tag marker.
+    const mk = new THREE.Mesh(new THREE.TorusGeometry(0.4, 0.05, 10, 24), markerMat);
     mk.position.set(0, 3.15, 0); g.add(mk); markers.push(mk);
-    // label
-    const lab = makeLabel(p.name, p.price, 2.0);
-    lab.position.set(x - side * 0, 1.0, z + 1.0);
-    lab.userData.anchor = new THREE.Vector3(x, 3.0, z);
-    scene.add(lab);
     scene.add(g);
-    pois.push({ id: p.id, type: 'product', pos: new THREE.Vector3(x, 0, z), trig: 2.2 });
-    // reposition label above pedestal
+    // Billboard label above the pedestal.
+    const lab = makeLabel(p.name, p.price, 2.0);
     lab.position.set(x, 3.7, z);
+    scene.add(lab);
+    pois.push({ id: p.id, type: 'product', pos: new THREE.Vector3(x, 0, z), trig: 2.2 });
+    productById[p.id] = {
+      group: g, form, formMat, label: lab, marker: mk,
+      pedestalPos: new THREE.Vector3(x, 0, z), baseRot: 0,
+    };
   });
 
-  const blockers = pois.filter(p => p.type !== 'exit').map(p => ({ pos: p.pos, r: p.type === 'npc' ? 1.0 : 1.1 }));
+  const blockers = pois.filter((p) => p.type !== 'exit').map((p) => ({ pos: p.pos, r: p.type === 'npc' ? 1.0 : 1.1 }));
 
   // ── Input: keyboard + joystick ───────────────────────────
-  const keys = {};
-  const onKey = (e, d) => { const k = e.key.toLowerCase(); if (['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(k)) { keys[k] = d; e.preventDefault(); } };
-  const kd = e => onKey(e, true), ku = e => onKey(e, false);
-  window.addEventListener('keydown', kd); window.addEventListener('keyup', ku);
-
-  const joy = { active: false, id: null, x: 0, y: 0 };
-  const base = document.createElement('div'); base.className = 'v-joy-base';
-  const knob = document.createElement('div'); knob.className = 'v-joy-knob';
-  base.appendChild(knob); container.appendChild(base);
-  const JR = 52;
-  function jStart(e) { joy.active = true; joy.id = e.pointerId; const r = base.getBoundingClientRect(); joy.cx = r.left + r.width / 2; joy.cy = r.top + r.height / 2; base.setPointerCapture(e.pointerId); jMove(e); }
-  function jMove(e) { if (!joy.active || e.pointerId !== joy.id) return; let dx = e.clientX - joy.cx, dy = e.clientY - joy.cy; const d = Math.hypot(dx, dy) || 1; if (d > JR) { dx = dx / d * JR; dy = dy / d * JR; } knob.style.transform = `translate(${dx}px,${dy}px)`; joy.x = dx / JR; joy.y = dy / JR; }
-  function jEnd(e) { if (e.pointerId !== joy.id) return; joy.active = false; joy.x = 0; joy.y = 0; knob.style.transform = 'translate(0,0)'; }
-  base.addEventListener('pointerdown', jStart); base.addEventListener('pointermove', jMove);
-  base.addEventListener('pointerup', jEnd); base.addEventListener('pointercancel', jEnd);
+  const kbd = createKeyboard();
+  const keys = kbd.keys;
+  const stick = createJoystick(container);
+  const joy = stick.joy;
 
   // ── Orbit camera (drag to rotate 360°, pinch / wheel to zoom) ─
-  let camYaw = 0, camElev = 0.6, camDist = 11;
+  const orbitCam = createOrbitCamera(renderer.domElement, { yaw: 0, elev: 0.45, dist: 10, minDist: 5, maxDist: 22, minElev: 0.16, maxElev: 1.2, pinch: 0.06, wheel: 0.02 });
+  const cam = orbitCam.cam;
+
+  // ── Tactile inspect mode ─────────────────────────────────
+  // While inspecting we: pause player + ambient sim, dolly the camera to frame
+  // the focused pedestal, lift its garment `form` onto an imaginary turntable,
+  // and route one-finger drags to spin the form (pinch/wheel zooms the inspect
+  // camera). Orbit drags are suppressed; the existing orbitCam stays attached
+  // but we ignore cam.* while a tween-driven inspect pose owns the camera.
   const dom = renderer.domElement;
-  const orbit = { pointers: new Map(), lastDist: 0 };
-  function camDown(e) { orbit.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY }); try { dom.setPointerCapture(e.pointerId); } catch (_) {} }
-  function camMove(e) {
-    if (!orbit.pointers.has(e.pointerId)) return;
-    const prev = orbit.pointers.get(e.pointerId);
-    const dx = e.clientX - prev.x, dy = e.clientY - prev.y;
-    orbit.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if (orbit.pointers.size >= 2) {
-      const pts = [...orbit.pointers.values()];
-      const d = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-      if (orbit.lastDist) camDist = Math.max(6, Math.min(18, camDist - (d - orbit.lastDist) * 0.05));
-      orbit.lastDist = d;
-    } else {
-      camYaw -= dx * 0.007;
-      camElev = Math.max(0.2, Math.min(1.2, camElev + dy * 0.005));
-    }
+  const inspect = {
+    active: false,
+    id: null,
+    entry: null,         // productById entry currently focused
+    t: 0,                // 0..1 tween progress (toward target = active)
+    spinYaw: 0,          // accumulated form yaw from drags
+    spinTilt: 0,         // clamped form x tilt
+    spinVel: 0,          // residual yaw velocity for gentle ease-out
+    dist: 4.2,           // inspect camera distance (pinch/wheel zoom)
+    minDist: 2.6, maxDist: 7.0,
+    // remembered start pose for the camera tween
+    fromPos: new THREE.Vector3(), fromTarget: new THREE.Vector3(),
+    camTarget: new THREE.Vector3(),  // current smoothed look-at
+    liftFrom: 0, liftTo: 0,          // form lift tween (y offset)
+  };
+  // Live look-at the follow loop maintains, so endInspect can tween back from
+  // wherever the camera currently is. Seed it to the at-origin follow target
+  // (matches what frame() sets when pp ≈ origin) so an early enterInspect
+  // doesn't tween the look-at from world origin.
+  const followLook = new THREE.Vector3(0, 1.4, -0.5);
+
+  function inspectPedestalCenter(entry, out) {
+    // Frame around the upper garment area (~y 2.0) of the pedestal.
+    return out.set(entry.pedestalPos.x, 2.1, entry.pedestalPos.z);
   }
-  function camUp(e) { orbit.pointers.delete(e.pointerId); if (orbit.pointers.size < 2) orbit.lastDist = 0; }
-  dom.addEventListener('pointerdown', camDown); dom.addEventListener('pointermove', camMove);
-  dom.addEventListener('pointerup', camUp); dom.addEventListener('pointercancel', camUp);
-  const onWheel = (e) => { camDist = Math.max(6, Math.min(18, camDist + e.deltaY * 0.015)); e.preventDefault(); };
-  dom.addEventListener('wheel', onWheel, { passive: false });
+
+  // Drag-to-spin pointer controller (active only while inspecting).
+  const spin = { pointers: new Map(), lastDist: 0 };
+  const spinDown = (e) => {
+    if (!inspect.active) return;
+    e.stopPropagation();                 // keep the orbit controller from grabbing it
+    spin.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    inspect.spinVel = 0;
+    try { dom.setPointerCapture(e.pointerId); } catch (_) {}
+  };
+  const spinMove = (e) => {
+    if (!inspect.active) return;
+    e.stopPropagation();
+    if (!spin.pointers.has(e.pointerId)) return;
+    const prev = spin.pointers.get(e.pointerId);
+    const dx = e.clientX - prev.x, dy = e.clientY - prev.y;
+    spin.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (spin.pointers.size >= 2) {
+      const pts = [...spin.pointers.values()];
+      const d = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      if (spin.lastDist) inspect.dist = Math.max(inspect.minDist, Math.min(inspect.maxDist, inspect.dist - (d - spin.lastDist) * 0.012));
+      spin.lastDist = d;
+    } else {
+      inspect.spinYaw -= dx * 0.01;
+      inspect.spinVel = -dx * 0.01;
+      inspect.spinTilt = Math.max(-0.5, Math.min(0.5, inspect.spinTilt + dy * 0.006));
+    }
+  };
+  const spinUp = (e) => { if (inspect.active) e.stopPropagation(); spin.pointers.delete(e.pointerId); if (spin.pointers.size < 2) spin.lastDist = 0; };
+  const spinWheel = (e) => {
+    if (!inspect.active) return;
+    inspect.dist = Math.max(inspect.minDist, Math.min(inspect.maxDist, inspect.dist + e.deltaY * 0.004));
+    e.preventDefault(); e.stopPropagation();
+  };
+  // Capture-phase so spin handlers win over the orbit controller while inspecting.
+  dom.addEventListener('pointerdown', spinDown, true);
+  dom.addEventListener('pointermove', spinMove, true);
+  dom.addEventListener('pointerup', spinUp, true);
+  dom.addEventListener('pointercancel', spinUp, true);
+  dom.addEventListener('wheel', spinWheel, { passive: false, capture: true });
+
+  function enterInspect(id) {
+    const entry = productById[id];
+    if (!entry) return;                 // unknown id → no-op
+    if (inspect.active && inspect.entry === entry) return; // same target
+    // Capture the camera's current pose so the tween starts from "here".
+    inspect.fromPos.copy(camera.position);
+    inspect.fromTarget.copy(followLook);
+    inspect.camTarget.copy(followLook);
+    inspect.active = true;
+    inspect.id = id;
+    inspect.entry = entry;
+    inspect.t = 0;
+    inspect.spinYaw = entry.form.rotation.y;
+    inspect.spinTilt = entry.form.rotation.x;
+    inspect.spinVel = 0;
+    inspect.dist = 4.2;
+    inspect.liftFrom = entry.form.position.y;
+    inspect.liftTo = 0.55;              // lift garment onto the turntable
+    // Drop any in-flight orbit pointer so it can't fire a false pinch-zoom on
+    // the next drag after we exit inspect.
+    orbitCam.clearPointers();
+  }
+
+  function leaveInspect() {
+    if (!inspect.active) return;
+    inspect.active = false;             // frame loop tweens t → 0 then drops form
+  }
+
+  function setInspectColorHex(hex) {
+    if (!inspect.entry) return;
+    try { inspect.entry.formMat.color.set(hex); } catch (_) {}
+  }
 
   // ── Loop ─────────────────────────────────────────────────
   const SPEED = 5.4;
   const camTarget = new THREE.Vector3(), tmp = new THREE.Vector3();
+  const followPos = new THREE.Vector3();   // computed follow-camera position
+  const inspPos = new THREE.Vector3();     // computed inspect-camera position
+  const inspLook = new THREE.Vector3();    // inspect look-at (garment center)
   let phase = 0, near = null, raf = 0, last = performance.now(), running = true;
 
   function frame(now) {
     if (!running) return;
-    const dt = Math.min(.05, (now - last) / 1000); last = now;
+    const dt = Math.min(0.05, (now - last) / 1000); last = now;
     const t = now / 1000;
+
+    // Inspect tween: ease t toward 1 while active, toward 0 while leaving (~0.4s).
+    inspect.t += (inspect.active ? 1 : -1) * (dt / 0.4);
+    inspect.t = Math.max(0, Math.min(1, inspect.t));
+    const it = inspect.t < 0.5 ? 2 * inspect.t * inspect.t : 1 - Math.pow(-2 * inspect.t + 2, 2) / 2; // easeInOutQuad
+    const inspecting = inspect.t > 0.001;
+    // Once fully tweened out, drop the form back onto its pedestal and release it.
+    if (!inspect.active && inspect.entry && inspect.t <= 0.001) {
+      inspect.entry.form.position.y = 0;
+      inspect.entry.form.rotation.set(0, 0, 0);
+      inspect.entry = null; inspect.id = null;
+    }
 
     let ix = 0, iz = 0;
     if (keys['w'] || keys['arrowup']) iz -= 1;
@@ -243,57 +448,102 @@ export function createVeyraStore(container, opts) {
     if (keys['a'] || keys['arrowleft']) ix -= 1;
     if (keys['d'] || keys['arrowright']) ix += 1;
     ix += joy.x; iz += joy.y;
-    let mag = Math.hypot(ix, iz); const moving = mag > .08;
+    let mag = Math.hypot(ix, iz);
+    // Freeze player movement while inspecting (or mid-transition).
+    const moving = !inspecting && mag > 0.08;
     if (mag > 1) { ix /= mag; iz /= mag; mag = 1; }
 
     const pp = player.group.position;
     if (moving) {
-      const fwdX = -Math.sin(camYaw), fwdZ = -Math.cos(camYaw);
-      const rgtX = Math.cos(camYaw), rgtZ = -Math.sin(camYaw);
+      const fwdX = -Math.sin(cam.yaw), fwdZ = -Math.cos(cam.yaw);
+      const rgtX = Math.cos(cam.yaw), rgtZ = -Math.sin(cam.yaw);
       const mvx = rgtX * ix + fwdX * (-iz), mvz = rgtZ * ix + fwdZ * (-iz);
       pp.x += mvx * SPEED * dt; pp.z += mvz * SPEED * dt;
-      pp.x = Math.max(-RX + .7, Math.min(RX - .7, pp.x));
-      pp.z = Math.max(-RZ + .7, Math.min(RZ - .4, pp.z));
-      blockers.forEach(b => { const dx = pp.x - b.pos.x, dz = pp.z - b.pos.z; const dd = Math.hypot(dx, dz) || 1; if (dd < b.r) { pp.x = b.pos.x + dx / dd * b.r; pp.z = b.pos.z + dz / dd * b.r; } });
+      pp.x = Math.max(-RX + 0.7, Math.min(RX - 0.7, pp.x));
+      pp.z = Math.max(-RZ + 0.7, Math.min(RZ - 0.4, pp.z));
+      blockers.forEach((b) => { const dx = pp.x - b.pos.x, dz = pp.z - b.pos.z; const dd = Math.hypot(dx, dz) || 1; if (dd < b.r) { pp.x = b.pos.x + dx / dd * b.r; pp.z = b.pos.z + dz / dd * b.r; } });
       const tr = Math.atan2(mvx, mvz); let diff = ((tr - player.group.rotation.y + Math.PI) % (Math.PI * 2)) - Math.PI; player.group.rotation.y += diff * Math.min(1, dt * 12);
     }
     const sp = moving ? mag : 0; phase += dt * (6 + sp * 4) * (moving ? 1 : 0);
-    const sw = moving ? .7 * sp : 0; const ease = (p, v) => p.rotation.x += (v - p.rotation.x) * Math.min(1, dt * 14);
+    const sw = moving ? 0.7 * sp : 0; const ease = (p, v) => p.rotation.x += (v - p.rotation.x) * Math.min(1, dt * 14);
     ease(player.parts.legL, Math.sin(phase) * sw); ease(player.parts.legR, -Math.sin(phase) * sw);
-    ease(player.parts.armL, -Math.sin(phase) * sw * .7); ease(player.parts.armR, Math.sin(phase) * sw * .7);
-    player.parts.torso.position.y = 1.05 + (moving ? Math.abs(Math.sin(phase)) * .04 : 0);
-    blob.position.set(pp.x, .08, pp.z);
+    ease(player.parts.armL, -Math.sin(phase) * sw * 0.7); ease(player.parts.armR, Math.sin(phase) * sw * 0.7);
+    player.parts.torso.position.y = 1.05 + (moving ? Math.abs(Math.sin(phase)) * 0.04 : 0);
+    blob.position.set(pp.x, 0.05, pp.z);
 
-    // NPC idle + look at player
-    npc.parts.torso.position.y = 1.05 + Math.sin(t * 1.3) * .02;
-    npc.group.rotation.y = Math.atan2(pp.x - npc.group.position.x, pp.z - npc.group.position.z);
+    // NPC idle + look at player (paused while inspecting)
+    if (!inspecting) {
+      npc.parts.torso.position.y = 1.05 + Math.sin(t * 1.3) * 0.02;
+      npc.group.rotation.y = Math.atan2(pp.x - npc.group.position.x, pp.z - npc.group.position.z);
+    }
 
-    // camera follow (orbit)
-    const offX = camDist * Math.cos(camElev) * Math.sin(camYaw);
-    const offZ = camDist * Math.cos(camElev) * Math.cos(camYaw);
-    const offY = camDist * Math.sin(camElev);
-    camTarget.set(pp.x + offX, pp.y + offY, pp.z + offZ);
-    camera.position.lerp(camTarget, Math.min(1, dt * 6));
-    tmp.set(pp.x * .6, 1.4, pp.z * .6 - .5); camera.lookAt(tmp);
+    // Drag-to-spin: apply accumulated yaw/tilt to the focused garment form and
+    // lift it onto the turntable, scaled by the tween factor. Released spin eases
+    // out (no snap-back) via residual velocity.
+    if (inspect.entry) {
+      const f = inspect.entry.form;
+      if (spin.pointers.size === 0 && Math.abs(inspect.spinVel) > 0.0001) {
+        inspect.spinYaw += inspect.spinVel;
+        inspect.spinVel *= 0.92;          // gentle ease-out
+      }
+      f.rotation.y = inspect.spinYaw;
+      f.rotation.x = inspect.spinTilt * it;
+      f.position.y = inspect.liftFrom + (inspect.liftTo - inspect.liftFrom) * it;
+    }
+
+    // camera follow (orbit) pose
+    const offX = cam.dist * Math.cos(cam.elev) * Math.sin(cam.yaw);
+    const offZ = cam.dist * Math.cos(cam.elev) * Math.cos(cam.yaw);
+    const offY = cam.dist * Math.sin(cam.elev);
+    followPos.set(pp.x + offX, pp.y + offY, pp.z + offZ);
+    followLook.set(pp.x * 0.6, 1.4, pp.z * 0.6 - 0.5);
+
+    if (inspecting && inspect.entry) {
+      // Inspect pose: dolly in front of the pedestal (toward room center / +face)
+      // at a calm low-angle, framing the lifted garment.
+      inspectPedestalCenter(inspect.entry, inspLook);
+      const px = inspect.entry.pedestalPos.x, pz = inspect.entry.pedestalPos.z;
+      const dirX = -px, dirZ = -pz;                        // toward room center
+      const dl = Math.hypot(dirX, dirZ) || 1;
+      inspPos.set(
+        px + (dirX / dl) * inspect.dist,
+        2.5 + inspect.dist * 0.18,
+        pz + (dirZ / dl) * inspect.dist,
+      );
+      // Blend the live follow pose into the inspect pose by the eased factor.
+      camTarget.copy(followPos).lerp(inspPos, it);
+      inspect.camTarget.lerp(inspLook, Math.min(1, dt * 6));
+      // Blend look-at between follow and inspect targets too.
+      tmp.copy(followLook).lerp(inspect.camTarget, it);
+      camera.position.lerp(camTarget, Math.min(1, dt * 6));
+      camera.lookAt(tmp);
+    } else {
+      camTarget.copy(followPos);
+      camera.position.lerp(camTarget, Math.min(1, dt * 6));
+      camera.lookAt(followLook);
+    }
 
     // billboards face camera
-    labels.forEach(l => l.quaternion.copy(camera.quaternion));
+    labels.forEach((l) => l.quaternion.copy(camera.quaternion));
     markers.forEach((m, i) => { m.rotation.z = t * 1.2 + i; });
-    npcMarker.position.y = 3.15 + Math.sin(t * 1.6) * .12;
-    arch.material.color = hsl(shopHue, .6, .58 + Math.sin(t * 2) * .06);
+    npcMarker.position.y = 3.15 + Math.sin(t * 1.6) * 0.12;
 
     // proximity
     let best = null, bestD = Infinity;
-    pois.forEach(it => { const d = Math.hypot(pp.x - it.pos.x, pp.z - it.pos.z); if (d < it.trig && d < bestD) { bestD = d; best = it; } });
+    pois.forEach((it) => { const d = Math.hypot(pp.x - it.pos.x, pp.z - it.pos.z); if (d < it.trig && d < bestD) { bestD = d; best = it; } });
     const id = best ? best.id : null;
     if (id !== (near && near.id)) { near = best; opts.onProximity && opts.onProximity(best ? { id: best.id, type: best.type } : null); }
 
-    renderer.render(scene, camera);
+    post.render(dt);
     raf = requestAnimationFrame(frame);
   }
   raf = requestAnimationFrame(frame);
 
-  const ro = new ResizeObserver(() => { camera.aspect = W() / H(); camera.updateProjectionMatrix(); renderer.setSize(W(), H()); });
+  const ro = new ResizeObserver(() => {
+    camera.aspect = W() / H(); camera.updateProjectionMatrix();
+    renderer.setSize(W(), H());
+    post.setSize(W(), H());
+  });
   ro.observe(container);
 
   // Pause rendering while the tab is hidden (saves battery on mobile).
@@ -306,17 +556,30 @@ export function createVeyraStore(container, opts) {
   document.addEventListener('visibilitychange', onVisibility);
 
   return {
+    // ── Tactile inspect API (new) ──────────────────────────
+    /** Enter inspect mode for product `id` (no-op on unknown id; switches target if already inspecting). */
+    inspect(id) { enterInspect(id); },
+    /** Tween back to the follow camera, drop the form, restore drag-to-orbit + player control. */
+    endInspect() { leaveInspect(); },
+    /** Live-retint the currently inspected garment form. No-op if nothing is focused. */
+    setInspectColor(hex) { setInspectColorHex(hex); },
+
     dispose() {
       disposed = true; running = false; cancelAnimationFrame(raf); ro.disconnect();
       document.removeEventListener('visibilitychange', onVisibility);
-      window.removeEventListener('keydown', kd); window.removeEventListener('keyup', ku);
-      dom.removeEventListener('pointerdown', camDown); dom.removeEventListener('pointermove', camMove);
-      dom.removeEventListener('pointerup', camUp); dom.removeEventListener('pointercancel', camUp);
-      dom.removeEventListener('wheel', onWheel);
+      dom.removeEventListener('pointerdown', spinDown, true);
+      dom.removeEventListener('pointermove', spinMove, true);
+      dom.removeEventListener('pointerup', spinUp, true);
+      dom.removeEventListener('pointercancel', spinUp, true);
+      dom.removeEventListener('wheel', spinWheel, true);
+      kbd.dispose(); stick.dispose(); orbitCam.dispose();
+      post.dispose();
+      ownMats.forEach((m) => m.dispose());
+      envRT.dispose();
+      pmrem.dispose();
+      disposeScene(scene);
       renderer.dispose();
-      scene.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => { if (m.map) m.map.dispose(); m.dispose(); }); });
       if (renderer.domElement.parentNode) renderer.domElement.parentNode.removeChild(renderer.domElement);
-      if (base.parentNode) base.parentNode.removeChild(base);
     },
   };
-};
+}

@@ -4,10 +4,12 @@ import type { CSSVars } from '../../lib/css';
 
 export const SKIN_COLORS = ['#f1c9a5', '#e0a878', '#c9854f', '#8d5a36'];
 export const GATE_HUES = [184, 150, 210, 250, 95, 30];
+// Avatar style options, defined once (id + STR key) and shared with CreateScreen.
+// Labels are resolved via g.t so they go through the i18n single source of truth.
 export const GATE_STYLES = [
-  { id: 'minimal', vi: 'Tối giản', en: 'Minimal' },
-  { id: 'street', vi: 'Đường phố', en: 'Street' },
-  { id: 'soft', vi: 'Dịu dàng', en: 'Soft' },
+  { id: 'minimal', key: 'styleMinimal' },
+  { id: 'street', key: 'styleStreet' },
+  { id: 'soft', key: 'styleSoft' },
 ];
 
 export interface GuardDialogueProps {
@@ -27,18 +29,18 @@ export interface GuardDialogueProps {
 
 /** Diegetic gatekeeper conversation — replaces the old character-creation popup. */
 export function GuardDialogue(p: GuardDialogueProps) {
-  const vi = p.g.lang === 'vi';
+  const t = p.g.t;
   const say = p.step === 'name'
-    ? (vi ? `Dừng lại, lữ khách! Trước khi vào Veyra, cho ta biết tên ngươi.` : `Halt, traveler! Before you enter Veyra, tell me your name.`)
-    : (vi ? `${p.name.trim() || 'Lữ khách'}, chỉnh lại diện mạo cho tươm tất rồi ta mở cổng.` : `${p.name.trim() || 'Traveler'}, fix up your look and I'll open the gate.`);
+    ? t('guardAskName')
+    : t('guardAskLook').replace('{name}', p.name.trim() || t('guardTraveler'));
 
   return (
     <div className="v-guard">
       <div className="v-guard-head">
         <Avatar hue={200} size={42} />
         <div className="v-guard-id">
-          <div className="v-guard-name">{vi ? 'Bảo vệ cổng' : 'Gatekeeper'}</div>
-          <div className="v-mono v-guard-role">{vi ? 'Canh cổng Veyra' : 'Veyra gate'}</div>
+          <div className="v-guard-name">{t('guardName')}</div>
+          <div className="v-mono v-guard-role">{t('guardRole')}</div>
         </div>
         <span className="v-mono v-guard-step">{p.step === 'name' ? '1/2' : '2/2'}</span>
       </div>
@@ -48,11 +50,11 @@ export function GuardDialogue(p: GuardDialogueProps) {
       {p.step === 'name' ? (
         <>
           <input className="v-input" value={p.name} maxLength={16} autoFocus
-                 placeholder={vi ? 'Tên nhân vật…' : 'Your name…'}
+                 placeholder={t('namePlaceholder')}
                  onChange={(e) => p.setName(e.target.value)}
                  onKeyDown={(e) => { if (e.key === 'Enter') p.onNext(); }} />
           <div className="v-guard-actions">
-            <Btn variant="primary" size="lg" full icon="chevR" onClick={p.onNext}>{vi ? 'Tiếp tục' : 'Continue'}</Btn>
+            <Btn variant="primary" size="lg" full icon="chevR" onClick={p.onNext}>{t('continue')}</Btn>
           </div>
         </>
       ) : (
@@ -82,12 +84,12 @@ export function GuardDialogue(p: GuardDialogueProps) {
             <div className="v-seg">
               {GATE_STYLES.map((s) => (
                 <button key={s.id} className={'v-seg-btn' + (s.id === p.style ? ' is-on' : '')}
-                        onClick={() => p.setStyle(s.id)}>{vi ? s.vi : s.en}</button>
+                        onClick={() => p.setStyle(s.id)}>{t(s.key)}</button>
               ))}
             </div>
           </div>
           <div className="v-guard-actions">
-            <Btn variant="primary" size="lg" full icon="spark" onClick={p.onConfirm}>{vi ? 'Xong — mở cổng' : 'Done — open gate'}</Btn>
+            <Btn variant="primary" size="lg" full icon="spark" onClick={p.onConfirm}>{t('openGate')}</Btn>
           </div>
         </>
       )}

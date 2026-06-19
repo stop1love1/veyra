@@ -43,6 +43,7 @@ export const STR: Record<string, Localized> = {
   address:        { vi: 'Địa chỉ giao hàng',     en: 'Delivery address' },
   orderDone:      { vi: 'Đặt hàng thành công!',  en: 'Order placed!' },
   orderDoneSub:   { vi: 'Bạn nhận được +120 xu và 1 huy hiệu', en: 'You earned +120 coins and a badge' },
+  firstBuyer:     { vi: 'Người mua mới',           en: 'First buyer' },
   backToWorld:    { vi: 'Về thế giới',            en: 'Back to world' },
   quests:         { vi: 'Nhiệm vụ',                en: 'Quests' },
   vouchers:       { vi: 'Voucher',                   en: 'Vouchers' },
@@ -60,6 +61,66 @@ export const STR: Record<string, Localized> = {
   dropScene:      { vi: '3D scene — thay render tại đây', en: '3D scene — drop render here' },
   dropProduct:    { vi: 'Ảnh sản phẩm',           en: 'product shot' },
   recommended:    { vi: 'Stylist gợi ý',          en: 'Stylist picks' },
+
+  // ── Phase 1: loading / empty / a11y / dialogue ──
+  loadingWorld:   { vi: 'Đang dựng thế giới…',   en: 'Building your world…' },
+  loadingStore:   { vi: 'Đang mở cửa hàng…',     en: 'Opening the store…' },
+  emptyCartCta:   { vi: 'Khám phá cửa hàng',      en: 'Explore shops' },
+  emptyCartTitle: { vi: 'Giỏ vẫn còn trống',       en: 'Your bag is still empty' },
+  emptyCartBody:  { vi: 'Dạo quanh Quảng trường Veyra và nhặt vài món bạn thích.', en: 'Wander Veyra Plaza and grab a few things you love.' },
+  typeMessage:    { vi: 'Nhắn tin…',                en: 'Type a message…' },
+  npcEcho:        { vi: 'Mình ghi nhận rồi nhé — để mình gợi ý thêm cho bạn!', en: 'Got it — let me suggest a few more things for you!' },
+  favAdded:       { vi: 'Đã lưu yêu thích',         en: 'Saved to favorites' },
+  favRemoved:     { vi: 'Đã bỏ yêu thích',          en: 'Removed from favorites' },
+  // aria labels (icon-only buttons)
+  aClose:         { vi: 'Đóng',                      en: 'Close' },
+  aCart:          { vi: 'Mở giỏ hàng',             en: 'Open cart' },
+  aProfile:       { vi: 'Hồ sơ nhân vật',          en: 'Player profile' },
+  aMap:           { vi: 'Bản đồ',                  en: 'Map' },
+  aQuests:        { vi: 'Nhiệm vụ',                 en: 'Quests' },
+  aBack:          { vi: 'Quay lại',                  en: 'Back' },
+  aLang:          { vi: 'Đổi ngôn ngữ',            en: 'Switch language' },
+  aSend:          { vi: 'Gửi tin nhắn',            en: 'Send message' },
+  aFav:           { vi: 'Yêu thích',                en: 'Favorite' },
+  aDelItem:       { vi: 'Xoá',                      en: 'Remove' },
+
+  // diegetic panel subs + world/store prompts
+  questBoard:     { vi: 'Bảng nhiệm vụ',          en: 'Quest board' },
+  questBoardLoc:  { vi: 'Bảng nhiệm vụ · Veyra Plaza', en: 'Quest board · Veyra Plaza' },
+  tradeCounter:   { vi: 'Quầy giao dịch',          en: 'Trade counter' },
+  tradeCounterLoc:{ vi: 'Quầy giao dịch · Veyra Plaza', en: 'Trade counter · Veyra Plaza' },
+  open:           { vi: 'Mở',                       en: 'Open' },
+  exit:           { vi: 'Cửa ra',                  en: 'Exit' },
+  backToPlaza:    { vi: 'Ra quảng trường',         en: 'Back to plaza' },
+  leave:          { vi: 'Ra',                        en: 'Leave' },
+  view:           { vi: 'Xem',                       en: 'View' },
+  codNote:        { vi: 'Thanh toán khi nhận',      en: 'Cash on delivery' },
+  voucherOn:      { vi: 'Đang dùng',               en: 'Applied' },
+  // flash toasts
+  flashAddedCart: { vi: 'Đã thêm vào giỏ',        en: 'Added to cart' },
+  flashRewardGot: { vi: 'Đã nhận thưởng',         en: 'Reward claimed' },
+  coinUnit:       { vi: 'xu',                       en: 'coins' },
+  voucherApplied: { vi: 'Đã áp dụng voucher',     en: 'Voucher applied' },
+  voucherRemoved: { vi: 'Đã gỡ voucher',          en: 'Voucher removed' },
+
+  // ── Gate screen + gatekeeper dialogue ──
+  loading:        { vi: 'đang tải…',               en: 'loading…' },
+  gateHintRoam:   { vi: 'Đi tới cổng — gặp bảo vệ để vào Veyra', en: 'Walk to the gate — meet the guard to enter Veyra' },
+  gateHintOpen:   { vi: 'Cổng đã mở — tự đi qua để vào thế giới', en: 'Gate open — walk through to enter' },
+  guardName:      { vi: 'Bảo vệ cổng',             en: 'Gatekeeper' },
+  guardRole:      { vi: 'Canh cổng Veyra',         en: 'Veyra gate' },
+  guardAskName:   { vi: 'Dừng lại, lữ khách! Trước khi vào Veyra, cho ta biết tên ngươi.', en: 'Halt, traveler! Before you enter Veyra, tell me your name.' },
+  // {name} is substituted by the component (g.t has no interpolation args).
+  guardAskLook:   { vi: '{name}, chỉnh lại diện mạo cho tươm tất rồi ta mở cổng.', en: '{name}, fix up your look and I\'ll open the gate.' },
+  guardTraveler:  { vi: 'Lữ khách',                en: 'Traveler' },
+  namePlaceholder:{ vi: 'Tên nhân vật…',           en: 'Your name…' },
+  continue:       { vi: 'Tiếp tục',                 en: 'Continue' },
+  openGate:       { vi: 'Xong — mở cổng',          en: 'Done — open gate' },
+
+  // ── Avatar style options (shared by CreateScreen + GuardDialogue) ──
+  styleMinimal:   { vi: 'Tối giản',                en: 'Minimal' },
+  styleStreet:    { vi: 'Đường phố',               en: 'Street' },
+  styleSoft:      { vi: 'Dịu dàng',                en: 'Soft' },
 };
 
 // UI-key translation (t) now lives in lib/i18n and is backed by i18next.
