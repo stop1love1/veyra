@@ -535,6 +535,32 @@ export function createMaterials({ anisotropy = 4, envMap = null } = {}) {
   }
 
   /**
+   * Late-bind CC0 PBR maps onto the ground/wall materials. Each `sets.*` is
+   * { map, normalMap, roughnessMap } with any field possibly null. Repeat is in
+   * metres⁻¹ so the tiling matches real-world scale. No-op for missing sets.
+   */
+  function applyPBR(sets) {
+    if (!sets) return;
+    const bind = (m, s) => {
+      // `plaster` is a per-hue factory FUNCTION (not a material) — guard against
+      // it (and anything else without a material's fields) so binding never
+      // crashes on `m.color`. Real ground/wall materials have isMaterial === true.
+      if (!m || !s || !m.isMaterial) return;
+      // Reuse the material's EXISTING procedural-map tiling so the swapped-in CC0
+      // textures tile at the same density instead of guessing UV conventions.
+      const rep = m.map ? m.map.repeat.clone() : new THREE.Vector2(4, 4);
+      if (s.map) { s.map.repeat.copy(rep); m.map = s.map; m.color.setScalar(1); }
+      if (s.normalMap) { s.normalMap.repeat.copy(rep); m.normalMap = s.normalMap; }
+      if (s.roughnessMap) { s.roughnessMap.repeat.copy(rep); m.roughnessMap = s.roughnessMap; }
+      m.needsUpdate = true;
+    };
+    bind(asphalt, sets.asphalt);
+    bind(paving, sets.paving);
+    bind(concrete, sets.paving);
+    bind(plaster, sets.plaster);
+  }
+
+  /**
    * Simulate rain wetness on the ground (v in 0..1): lower roughness and
    * raise env reflectivity. v=0 restores the stored base values exactly.
    */
@@ -579,6 +605,7 @@ export function createMaterials({ anisotropy = 4, envMap = null } = {}) {
     curb,
     makeSign,
     setEnvMap,
+    applyPBR,
     setWetness,
     dispose,
   };

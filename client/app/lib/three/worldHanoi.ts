@@ -2,7 +2,7 @@
 // rebuilt from REAL OpenStreetMap data and rendered hyper-realistic (PBR).
 //
 // createVeyraWorld(container, opts) -> { dispose, recenter, setLang }
-// opts: { playerHue, lite, shops:[{id,hue,name}], onProximity(poi|null), onCoin(n),
+// opts: { playerHue, lite, shops:[{id,hue,name}], onProximity(poi|null),
 //         onReady?(), onWeather?({ tempC, label, labelEn, icon, wind }) }
 //
 // The world is no longer procedural. At runtime we FETCH '/data/hanoi.json' — a
@@ -28,7 +28,10 @@
 
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { Water } from 'three/addons/objects/Water.js';
 import { hsl } from './shared/helpers';
+import { createKitLoader } from './shared/assets';
+import { createTextureLoader } from './shared/textures';
 import { buildAvatar } from './shared/avatar';
 import { createKeyboard, createJoystick } from './shared/controls';
 import { disposeScene } from './shared/dispose';
@@ -77,7 +80,11 @@ export function createVeyraWorld(container, opts) {
   // sky/weather by REAL Open-Meteo data (see the loop below). No forced-bright
   // overrides — environment.setTimeOfDay()/setWeather() carry the look naturally so
   // night is night and noon is bright, soft and never blown out.
-  const environment = createEnvironment(renderer, scene, { quality: q });
+  const environment = createEnvironment(renderer, scene, {
+    quality: q,
+    // HDRI IBL for richer real-sky reflections (skipped on LOW → dynamic Sky IBL).
+    envHdrUrl: q.tier === 'low' ? null : '/textures/env/sky_1k.hdr',
+  });
 
   // Vietnam is UTC+7 (no DST). Compute Hanoi local hour from the device clock.
   function hanoiHour() {
@@ -110,6 +117,14 @@ export function createVeyraWorld(container, opts) {
   const items = createHanoiItems(THREE);
   const itemGroups = [];  // item root groups (geometry freed by items.dispose())
 
+  // ── External CC0 assets (textures + GLB), all with procedural fallbacks ──
+  const texer = createTextureLoader({ anisotropy: q.anisotropy });
+  const kit = createKitLoader();
+  // Kick GLB preloads off immediately (resolved before build() places them).
+  const kitReady = q.tier === 'low'
+    ? Promise.resolve()
+    : kit.preloadUrls(['build:detail-awning', 'build:detail-parasol-a']);
+
   // Configure façade material tiling ONCE: walls are UV-mapped in METRES, so each
   // map repeats every (tileWidth × tileHeight) metres. DoubleSide because the walls
   // are single-quad soups (winding-agnostic) — this fixes shading + visibility.
@@ -132,6 +147,7 @@ export function createVeyraWorld(container, opts) {
   // keep explicit refs for the big merged buffers).
   const ownedGeoms = [];
   const ownedInstanced = [];   // InstancedMeshes (trees) — need explicit .dispose()
+  const ownedTextures = [];    // CanvasTextures (gate labels) — need explicit .dispose()
 
   const circles = [];        // collision: { x, z, r }
   const interactables = [];  // { id, type, name, pos, trig, marker?, markerBaseY? }
@@ -174,6 +190,56 @@ export function createVeyraWorld(container, opts) {
   // deterministic per-position pseudo-random so dressing is varied but stable
   const hash01 = (x, z) => { const s = Math.sin(x * 12.9898 + z * 78.233) * 43758.5453; return s - Math.floor(s); };
 
+  // Procedural tiling normal map for the lake (fallback if the real JPG 404s).
+  function makeWaterNormals(size = 256) {
+    const c = document.createElement('canvas'); c.width = c.height = size;
+    const ctx = c.getContext('2d');
+    const img = ctx.createImageData(size, size);
+    const h = (x, y) => {
+      let v = 0, amp = 1, f = 1;
+      for (let o = 0; o < 4; o++) {
+        v += amp * Math.sin((x * 0.13 + y * 0.07) * f + o) * Math.cos((x * 0.05 - y * 0.11) * f - o);
+        amp *= 0.5; f *= 2.0;
+      }
+      return v;
+    };
+    for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+      const dx = h(x + 1, y) - h(x - 1, y);
+      const dy = h(x, y + 1) - h(x, y - 1);
+      const nx = -dx * 0.5, ny = -dy * 0.5, nz = 1;
+      const inv = 1 / Math.hypot(nx, ny, nz);
+      const i = (y * size + x) * 4;
+      img.data[i] = (nx * inv * 0.5 + 0.5) * 255;
+      img.data[i + 1] = (ny * inv * 0.5 + 0.5) * 255;
+      img.data[i + 2] = (nz * inv * 0.5 + 0.5) * 255;
+      img.data[i + 3] = 255;
+    }
+    ctx.putImageData(img, 0, 0);
+    const tex = new THREE.CanvasTexture(c);
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    return tex;
+  }
+
+  // Build a Three.js Water on a flat (XY) geometry. The caller sets rotation.x =
+  // -PI/2 + position so Water derives the correct upward reflection-plane normal.
+  function makeLakeWater(geo) {
+    if (!waterNormals) waterNormals = makeWaterNormals(q.tier === 'low' ? 128 : 256);
+    // Reflection render-target: kept modest for a smooth extra full-scene pass on a
+    // large OSM city (water reflections read fine at these sizes).
+    const reflRT = q.tier === 'high' ? 512 : q.tier === 'mid' ? 256 : 128;
+    return new Water(geo, {
+      textureWidth: reflRT,
+      textureHeight: reflRT,
+      waterNormals,
+      sunDirection: new THREE.Vector3(0, 1, 0),
+      sunColor: 0xffffff,
+      waterColor: new THREE.Color().setHSL(168 / 360, 0.45, 0.22).getHex(), // jade Hoan Kiem
+      distortionScale: 2.4,
+      fog: !!scene.fog,
+      alpha: 0.92,
+    });
+  }
+
   // ── Runtime state shared between the async build and the API/loop ─────────
   let disposed = false;
   let ready = false;
@@ -184,20 +250,50 @@ export function createVeyraWorld(container, opts) {
   let MAXR = 520;                              // player clamp radius (extentR + margin)
   // Orbit-zoom range. CAM_MAX is raised to ~extentR*0.7 in build() so the player can
   // pull WAY back to an aerial survey of the whole Old Quarter, then zoom to street level.
-  let CAM_MIN = 12, CAM_MAX = 420, CAM_ELEV_MAX = 1.42;
+  let CAM_MIN = 8, CAM_MAX = 420, CAM_ELEV_MAX = 1.5;
   let skylinePlaced = 0;                       // count of procedural backdrop boxes
-  const coins = [];
+
+  // ── Lake (Three.js Water) + wind + GLB/anim state ─────────
+  let water = null;            // reflective animated lake
+  let waterNormals = null;     // normal texture (real or procedural fallback)
+  let windDir = 0;             // radians; ripple scroll direction (from weather)
+  let birdMesh = null;         // instanced bird flock (built in build())
+  const birdParams = [];       // per-bird orbit params
+  // Tree foliage wind-sway uniforms (bound in build() onBeforeCompile).
+  const swayUniforms = { uTime: { value: 0 }, uWind: { value: 0 }, uWindDir: { value: 0 } };
+
+  // ── Perimeter-gate / auth state ──────────────────────────
+  // Unauthenticated players spawn OUTSIDE the fence and must clear a gate's
+  // ticket check to come in. `entered` flips true once they're inside the ring.
+  let fenceR = 0;                              // perimeter fence radius (set in build)
+  let entered = !!opts.authed;                 // inside the fence? guests start outside
+  const openGates = Object.create(null);       // gate key -> true once the ticket is accepted
+  let nearGate = null;                         // gate the guest is standing at (or null)
 
   // ─────────────────────────────────────────────────────────────────────────
   //  BUILD — runs after the data fetch resolves (or after a fallback on error).
   //  `data` may be null; we then render just ground + a nominal lake + landmarks
   //  so the world never hangs.
   // ─────────────────────────────────────────────────────────────────────────
-  function build(data) {
+  async function build(data) {
     if (disposed) return;
+
+    // ── External CC0 assets (parallel; each resolves null → procedural fallback) ──
+    const [waterNormalTex, asphaltSet, pavingSet, plasterSet] = await Promise.all([
+      texer.loadDataTex('/textures/water/waternormals.jpg', [1, 1]),
+      q.tier === 'low' ? null : texer.loadPBR('/textures/ground/asphalt', [1, 1]),
+      q.tier === 'low' ? null : texer.loadPBR('/textures/ground/paving', [1, 1]),
+      q.tier === 'low' ? null : texer.loadPBR('/textures/wall/plaster', [1, 1]),
+    ]);
+    await kitReady;
+    if (disposed) return;
+    waterNormals = waterNormalTex;   // may be null → makeWaterNormals() fallback in lake build
+    // Bind PBR maps onto the shared ground/wall materials (no-op if null).
+    mats.applyPBR && mats.applyPBR({ asphalt: asphaltSet, paving: pavingSet, plaster: plasterSet });
 
     const extentR = data && data.extentR ? data.extentR : 457;
     MAXR = extentR + 30;
+    fenceR = MAXR + 4;                      // fence sits just beyond the clamp radius
     const WORLD_R = extentR * 1.25;
     const SKYLINE_OUTER = extentR * 2.6;   // procedural skyline reaches to here
 
@@ -292,14 +388,10 @@ export function createVeyraWorld(container, opts) {
       lakeR = sum / lakePoly.length;
       lakeNorthZ = minZ;
 
-      // Water surface — jade-green reflective ShapeGeometry from the REAL ~120-pt
-      // Hoan Kiem polygon (shape in X/-Z so it lies flat after the -PI/2 rotation).
-      const lakeWaterMat = mats.water.clone();
-      lakeWaterMat.color = hsl(188, 0.42, 0.47);
-      lakeWaterMat.roughness = 0.06;
-      lakeWaterMat.metalness = 0.0;
-      lakeWaterMat.envMap = mats.water.envMap;
-      localMats.push(lakeWaterMat);
+      // Water surface — a reflective animated Three.js Water built on the REAL
+      // ~120-pt Hoan Kiem polygon. Shape is in X/-Y so that the mesh's own
+      // rotation.x=-PI/2 (NOT a baked geometry rotation — Water derives its
+      // reflection-plane normal from the mesh transform) lands it in world XZ.
       const shape = new THREE.Shape();
       lakePoly.forEach((p, i) => { if (i === 0) shape.moveTo(p[0], -p[1]); else shape.lineTo(p[0], -p[1]); });
       let waterGeo = new THREE.ShapeGeometry(shape);
@@ -314,10 +406,9 @@ export function createVeyraWorld(container, opts) {
         ell.absellipse(lakeCx, -lakeCz, (bx1 - bx0) / 2, (bz1 - bz0) / 2, 0, Math.PI * 2, false, 0);
         waterGeo = new THREE.ShapeGeometry(ell, 64);
       }
-      waterGeo.rotateX(-Math.PI / 2);
       ownedGeoms.push(waterGeo);
-      const lake = new THREE.Mesh(waterGeo, lakeWaterMat);
-      lake.position.y = 0.18; lake.receiveShadow = false; scene.add(lake);
+      water = makeLakeWater(waterGeo);
+      water.rotation.x = -Math.PI / 2; water.position.y = 0.18; scene.add(water);
 
       // Sunk lake-bed slab just under the water so the rim never reveals ground.
       const bedShape = new THREE.Shape();
@@ -379,14 +470,11 @@ export function createVeyraWorld(container, opts) {
         }
       }
     } else {
-      // No water data: a nominal circular jade lake so the scene still reads.
+      // No water data: a nominal circular jade lake (still reflective Water).
       lakeR = 110;
-      const lakeWaterMat = mats.water.clone();
-      lakeWaterMat.color = hsl(188, 0.42, 0.47); lakeWaterMat.roughness = 0.06; lakeWaterMat.metalness = 0.0; lakeWaterMat.envMap = mats.water.envMap;
-      localMats.push(lakeWaterMat);
       const wGeo = new THREE.CircleGeometry(lakeR, 96); ownedGeoms.push(wGeo);
-      const lake = new THREE.Mesh(wGeo, lakeWaterMat);
-      lake.rotation.x = -Math.PI / 2; lake.position.set(lakeCx, 0.18, lakeCz); scene.add(lake);
+      water = makeLakeWater(wGeo);
+      water.rotation.x = -Math.PI / 2; water.position.set(lakeCx, 0.18, lakeCz); scene.add(water);
       const promGeo = new THREE.RingGeometry(lakeR, lakeR + 7, 96, 1); ownedGeoms.push(promGeo);
       const prom = new THREE.Mesh(promGeo, mats.paving);
       prom.rotation.x = -Math.PI / 2; prom.position.set(lakeCx, 0.10, lakeCz); prom.receiveShadow = true; scene.add(prom);
@@ -613,7 +701,9 @@ export function createVeyraWorld(container, opts) {
       const skylineMats = SKY_HUES.map((h) => mats.plaster(h));
       localMats.push(...skylineMats);
       const cap = q.tier === 'low' ? 80 : q.tier === 'mid' ? 250 : 500;
-      const inner = extentR + 20;
+      // Start the backdrop a clean band OUTSIDE the fence so the guest's
+      // outside-the-gate apron (≤ fenceR+30) stays clear of skyline boxes.
+      const inner = MAXR + 40;
       const outer = SKYLINE_OUTER;
       const cell = 26;                       // grid pitch (metres)
       const half = Math.ceil(outer / cell);
@@ -731,6 +821,23 @@ export function createVeyraWorld(container, opts) {
       // (InstancedMesh.instanceColor — no vertexColors flag needed).
       const treeFoliageMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.92, metalness: 0, flatShading: true });
       localMats.push(treeFoliageMat);
+      // Wind sway: displace foliage verts along the wind direction, stronger
+      // toward the top, phased per-instance. Near-free (one vertex add); ties to
+      // the real wind via swayUniforms (driven each frame).
+      treeFoliageMat.onBeforeCompile = (shader) => {
+        shader.uniforms.uTime = swayUniforms.uTime;
+        shader.uniforms.uWind = swayUniforms.uWind;
+        shader.uniforms.uWindDir = swayUniforms.uWindDir;
+        shader.vertexShader = 'uniform float uTime;\nuniform float uWind;\nuniform float uWindDir;\n' + shader.vertexShader;
+        shader.vertexShader = shader.vertexShader.replace(
+          '#include <begin_vertex>',
+          `#include <begin_vertex>
+           float swayPhase = instanceMatrix[3].x * 0.15 + instanceMatrix[3].z * 0.15;
+           float swayAmt = sin(uTime * 1.6 + swayPhase) * (0.06 + uWind * 0.22);
+           transformed.x += cos(uWindDir) * swayAmt * (position.y * 0.5 + 0.5);
+           transformed.z += sin(uWindDir) * swayAmt * (position.y * 0.5 + 0.5);`,
+        );
+      };
       const trunks = new THREE.InstancedMesh(trunkGeo, mats.bark, treeList.length);
       const foliage = new THREE.InstancedMesh(foliageGeo, treeFoliageMat, treeList.length);
       const castShadows = q.tier === 'high';
@@ -779,47 +886,311 @@ export function createVeyraWorld(container, opts) {
     // floating enter-marker + interactable to each (like world.ts).
     placeShopsNearNorthShore(buildList, lakeCx, lakeNorthZ);
 
+    // Pulsing additive ground glow ring under each interactable marker.
+    for (let i = 0; i < interactables.length; i++) {
+      const it = interactables[i];
+      if (!it.pos) continue;
+      const ringGeo = new THREE.RingGeometry(0.6, 0.95, 28); ownedGeoms.push(ringGeo);
+      const ringMat = new THREE.MeshBasicMaterial({
+        color: it.type === 'shop' ? hsl(it.hue || 184, 0.5, 0.62) : 0x66e0d0,
+        transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+      });
+      localMats.push(ringMat);
+      const glow = new THREE.Mesh(ringGeo, ringMat);
+      glow.rotation.x = -Math.PI / 2; glow.position.set(it.pos.x, 0.08, it.pos.z);
+      scene.add(glow);
+      it.glow = glow; it.glowMat = ringMat;
+    }
+
     // (Quests + Cart kiosks intentionally NOT placed in the world — both remain
     //  reachable from the bottom navigation dock.)
 
     // ─────────────── Promenade dressing: lamps + a few benches ────────────
     dressPromenade(lakePoly, lakeCx, lakeCz);
 
+    // ─────────────── Lakeside lantern string (warm emissive at dusk) ──────
+    const lanternP = [];
+    for (let i = 0; i < 24; i++) {
+      const a = -Math.PI / 2 + (i / 24 - 0.5) * 1.4;
+      lanternP.push({ x: lakeCx + Math.cos(a) * (lakeR * 0.9), z: lakeNorthZ - 3 + Math.sin(a) * 4, y: 4.0 + (i % 2) * 0.3 });
+    }
+    const lanternGroup = items.lanterns(lanternP);
+    if (lanternGroup) { lanternGroup.matrixAutoUpdate = false; lanternGroup.updateMatrix(); scene.add(lanternGroup); itemGroups.push(lanternGroup); }
+
+    // ─────────────── Birds: a few low-poly gulls looping over the lake ────
+    if (q.tier !== 'low') {
+      const BIRDS = q.tier === 'high' ? 14 : 8;
+      const birdGeo = new THREE.ConeGeometry(0.18, 0.6, 4); birdGeo.rotateX(Math.PI / 2);
+      ownedGeoms.push(birdGeo);
+      const birdMat = new THREE.MeshStandardMaterial({ color: 0xe9eef2, roughness: 0.7, metalness: 0 });
+      localMats.push(birdMat);
+      birdMesh = new THREE.InstancedMesh(birdGeo, birdMat, BIRDS);
+      birdMesh.frustumCulled = false; birdMesh.castShadow = false;
+      for (let i = 0; i < BIRDS; i++) {
+        birdParams.push({
+          r: lakeR * (0.5 + hash01(i * 2.7, 1.3) * 0.5),
+          h: 14 + hash01(i, 5) * 10,
+          sp: 0.15 + hash01(i, 6) * 0.2,
+          ph: hash01(i, 7) * Math.PI * 2,
+          cx: lakeCx + (hash01(i, 8) - 0.5) * 40,
+          cz: lakeCz + (hash01(i, 9) - 0.5) * 40,
+        });
+      }
+      scene.add(birdMesh); ownedInstanced.push(birdMesh);
+    }
+
     // ───────────────────────────── Player ────────────────────────────────
     // Spawn on a road by the lake's north shore, facing the lake/Turtle Tower.
-    const spawnRoad = findNorthShoreSpawn(roadList, lakeCx, lakeNorthZ);
-    SPAWN = new THREE.Vector3(spawnRoad.x, 0, spawnRoad.z);
     player = buildAvatar({ hue: playerHue, style: opts.playerStyle });
+    if (entered) {
+      // Signed in: spawn on a road by the lake's north shore, facing the lake.
+      const spawnRoad = findNorthShoreSpawn(roadList, lakeCx, lakeNorthZ);
+      SPAWN = new THREE.Vector3(spawnRoad.x, 0, spawnRoad.z);
+      spawnYaw = Math.atan2(lakeCx - SPAWN.x, lakeCz - SPAWN.z); // face lake centre
+    } else {
+      // Guest: stand just OUTSIDE the North gate, facing in toward the city.
+      SPAWN = new THREE.Vector3(0, 0, -(fenceR + 16));
+      spawnYaw = Math.atan2(0 - SPAWN.x, 0 - SPAWN.z);          // face the gate / centre
+    }
     player.group.position.copy(SPAWN);
-    spawnYaw = Math.atan2(lakeCx - SPAWN.x, lakeCz - SPAWN.z); // face lake centre
     player.group.rotation.y = spawnYaw;
     scene.add(player.group);
     parts = player.parts;
-    camYaw = spawnYaw;
+    // Guests look INWARD at the built city (the gate is between them and it);
+    // signed-in players keep the lake-facing framing.
+    camYaw = entered ? spawnYaw : Math.PI;
 
     blob = new THREE.Mesh(new THREE.CircleGeometry(0.5, 20),
       new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.26 }));
     blob.rotation.x = -Math.PI / 2; blob.position.y = 0.05; scene.add(blob);
 
-    // ─────────────── Collectible coins along the north shore street ───────
-    const coinMatLocal = coinMat;
-    const coinN = Math.round(22 * density);
-    for (let i = 0; i < coinN; i++) {
-      const a = -Math.PI / 2 + (hash01(i * 3.3, 1.7) - 0.5) * 1.6;
-      const rr = lakeR * 0.55 + hash01(i * 1.9, 4.2) * 40;
-      const cxp = lakeCx + Math.cos(a) * rr;
-      const czp = lakeNorthZ - 6 - hash01(i * 2.7, 9.1) * 30 + Math.sin(a) * 4;
-      spawnCoin(cxp, czp, coinMatLocal);
-    }
+    // ── PERIMETER FENCE + four cardinal ticket gates (Đông/Tây/Nam/Bắc) + NPCs.
+    //    Rings the playable core just beyond the clamp radius, broken by four
+    //    labelled gates with guards/bystanders milling around them. Pushes its
+    //    blocker circles BEFORE buildGrid() so they enter the collision hash. ──
+    buildFenceAndGates();
 
     // ── Build the collision spatial hash now that every circle has been pushed
-    //    (buildings + lake rim + landmarks + furniture from scatterItems). ──
+    //    (buildings + lake rim + landmarks + furniture + fence). ──
     buildGrid();
 
     // ── Done: reveal. Guard disposed-before-ready. ──
     if (disposed) return;
     ready = true;
     if (opts.onReady) opts.onReady();
+  }
+
+  // ═══════════ PERIMETER FENCE + CARDINAL TICKET GATES (+ NPCs) ═══════════════
+  // A low iron fence rings the playable core just beyond the player's clamp
+  // radius, broken by four labelled gates at the cardinal points — Đông/East,
+  // Tây/West, Nam/South, Bắc/North — with guards + bystanders milling about.
+  // Visual + a ring of blocker circles; later phases spawn unauthenticated
+  // players OUTSIDE this fence and only open a gate once the ticket checks out.
+  const fenceGates = [];   // { key, label, a, x, z, hue } — used by later phases
+  function makeLabelTexture(text, hue) {
+    const cv = document.createElement('canvas'); cv.width = 256; cv.height = 128;
+    const cx = cv.getContext('2d');
+    cx.fillStyle = 'rgba(9,24,26,0.92)'; cx.fillRect(0, 0, 256, 128);
+    cx.fillStyle = 'hsl(' + hue + ',72%,60%)'; cx.fillRect(0, 0, 256, 10);
+    cx.fillStyle = '#eafcf8'; cx.textAlign = 'center'; cx.textBaseline = 'middle';
+    cx.font = 'bold 60px system-ui, sans-serif';
+    cx.fillText(text, 128, 74);
+    const tex = new THREE.CanvasTexture(cv);
+    tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = q.anisotropy || 1;
+    ownedTextures.push(tex);
+    return tex;
+  }
+  function buildFenceAndGates() {
+    const gated = !opts.authed;               // guests face closed gates until a ticket clears
+    const FENCE_R = MAXR + 4;                 // just beyond the player's clamp radius
+    const segN = Math.max(64, Math.round((2 * Math.PI * FENCE_R) / 11));
+    const GAP_HALF = 13 / FENCE_R;            // ~13 m half-gap at each gate
+    const GATES = [
+      { key: 'E', label: 'ĐÔNG', a: 0,             hue: 22 },
+      { key: 'S', label: 'NAM',  a: Math.PI / 2,   hue: 140 },
+      { key: 'W', label: 'TÂY',  a: Math.PI,       hue: 275 },
+      { key: 'N', label: 'BẮC',  a: -Math.PI / 2,  hue: 205 },
+    ];
+    const angDiff = (a, b) => Math.abs(((a - b + Math.PI) % (Math.PI * 2)) - Math.PI);
+    const inGap = (a) => GATES.some((g) => angDiff(a, g.a) < GAP_HALF);
+    const STYLES = ['minimal', 'street', 'soft'];
+    const placeNPC = (x, z, hue, style, ry) => {
+      const c = buildAvatar({ hue, style });
+      c.group.position.set(x, 0, z);
+      c.group.rotation.y = ry != null ? ry : 0;
+      c.group.scale.setScalar(0.98);
+      if (c.setStyle) c.setStyle(style);
+      scene.add(c.group);
+    };
+
+    const postMat = new THREE.MeshStandardMaterial({ color: hsl(212, 0.08, 0.30), roughness: 0.55, metalness: 0.45 });
+    const railMat = new THREE.MeshStandardMaterial({ color: hsl(212, 0.06, 0.24), roughness: 0.5, metalness: 0.55 });
+    const pillarMat = new THREE.MeshStandardMaterial({ color: hsl(28, 0.10, 0.42), roughness: 0.8, metalness: 0.05 });
+    localMats.push(postMat, railMat, pillarMat);
+
+    // ── fence ring: posts + two rails, broken at the four gates ──
+    const postUnit = new THREE.BoxGeometry(0.16, 2.3, 0.16).translate(0, 1.15, 0);
+    const samples = [];
+    for (let i = 0; i < segN; i++) {
+      const a = (i / segN) * Math.PI * 2;
+      samples.push({ a, x: Math.cos(a) * FENCE_R, z: Math.sin(a) * FENCE_R, gap: inGap(a) });
+    }
+    const postGeoms = [], railGeoms = [];
+    for (let i = 0; i < segN; i++) {
+      const s = samples[i];
+      if (s.gap) continue;
+      const pg = postUnit.clone(); pg.translate(s.x, 0, s.z); postGeoms.push(pg);
+      const nx = samples[(i + 1) % segN];
+      if (!nx.gap) {
+        const mx = (s.x + nx.x) / 2, mz = (s.z + nx.z) / 2;
+        const len = Math.hypot(nx.x - s.x, nx.z - s.z);
+        const ang = Math.atan2(nx.z - s.z, nx.x - s.x);
+        for (const [yy, hh, dd] of [[1.72, 0.12, 0.07], [0.95, 0.10, 0.06]]) {
+          const rg = new THREE.BoxGeometry(len, hh, dd); rg.rotateY(-ang); rg.translate(mx, yy, mz); railGeoms.push(rg);
+        }
+      }
+    }
+    postUnit.dispose();
+    const addMerged = (list, mat, cast) => {
+      if (!list.length) return;
+      const m = mergeGeometries(list, false); for (const g of list) g.dispose();
+      if (!m) return; ownedGeoms.push(m);
+      const mesh = new THREE.Mesh(m, mat); mesh.castShadow = !!cast; mesh.receiveShadow = true;
+      mesh.matrixAutoUpdate = false; mesh.updateMatrix(); scene.add(mesh);
+    };
+    addMerged(postGeoms, postMat, true);
+    addMerged(railGeoms, railMat, false);
+
+    // Continuous collision along the fence line — fine spacing so the player can't
+    // slip BETWEEN the visual posts. Broken only at the gate gaps.
+    const colN = Math.max(segN, Math.round((2 * Math.PI * FENCE_R) / 2.2));
+    for (let i = 0; i < colN; i++) {
+      const a = (i / colN) * Math.PI * 2;
+      if (inGap(a)) continue;
+      circles.push({ x: Math.cos(a) * FENCE_R, z: Math.sin(a) * FENCE_R, r: 1.4 });
+    }
+
+    // Security-guard look: a capped, blue-uniformed avatar, distinct from civilians.
+    const capGeo = new THREE.CylinderGeometry(0.27, 0.3, 0.2, 12); ownedGeoms.push(capGeo);
+    const capMat = new THREE.MeshStandardMaterial({ color: hsl(210, 0.16, 0.24), roughness: 0.85 }); localMats.push(capMat);
+    const faceOut = (a) => Math.atan2(Math.cos(a), Math.sin(a));   // look radially outward
+    const placeGuard = (x, z, ry) => {
+      const c = buildAvatar({ hue: 210, style: 'minimal' });
+      c.group.position.set(x, 0, z);
+      c.group.rotation.y = ry != null ? ry : 0;
+      if (c.setStyle) c.setStyle('minimal');
+      if (c.mats) {
+        if (c.mats.clothMat) c.mats.clothMat.color = hsl(210, 0.12, 0.34);
+        if (c.mats.pantsMat) c.mats.pantsMat.color = hsl(210, 0.08, 0.2);
+      }
+      const cap = new THREE.Mesh(capGeo, capMat); cap.position.y = 1.86; c.group.add(cap);
+      scene.add(c.group);
+    };
+
+    // ── the four cardinal gates: pillars + lintel + label banner + NPCs ──
+    for (const g of GATES) {
+      const cxg = Math.cos(g.a) * FENCE_R, czg = Math.sin(g.a) * FENCE_R;
+      fenceGates.push({ key: g.key, label: g.label, a: g.a, x: cxg, z: czg, hue: g.hue });
+      const tan = g.a + Math.PI / 2, tx = Math.cos(tan), tz = Math.sin(tan);
+      const halfGapM = GAP_HALF * FENCE_R;
+      for (const sgn of [-1, 1]) {
+        const px = cxg + tx * sgn * halfGapM, pz = czg + tz * sgn * halfGapM;
+        const pillar = new THREE.Mesh(new THREE.BoxGeometry(0.7, 4.2, 0.7), pillarMat);
+        pillar.position.set(px, 2.1, pz); pillar.castShadow = true; pillar.receiveShadow = true; scene.add(pillar);
+        ownedGeoms.push(pillar.geometry); circles.push({ x: px, z: pz, r: 0.7 });
+      }
+      const lintel = new THREE.Mesh(new THREE.BoxGeometry(halfGapM * 2 + 0.7, 0.7, 0.5), pillarMat);
+      lintel.position.set(cxg, 4.4, czg); lintel.rotation.y = -tan; lintel.castShadow = true; scene.add(lintel);
+      ownedGeoms.push(lintel.geometry);
+      const bannerMat = new THREE.MeshBasicMaterial({ map: makeLabelTexture(g.label, g.hue), side: THREE.DoubleSide });
+      localMats.push(bannerMat);
+      const banner = new THREE.Mesh(new THREE.PlaneGeometry(6, 2.2), bannerMat);
+      banner.position.set(cxg, 3.4, czg); banner.rotation.y = Math.PI / 2 - g.a;
+      scene.add(banner); ownedGeoms.push(banner.geometry);
+      const rec = fenceGates[fenceGates.length - 1];
+      // Closed barrier across the gap (only for guests). Hidden + its collision
+      // skipped once openGate(key) accepts the ticket.
+      if (gated) {
+        const barLen = halfGapM * 2;
+        const bar = new THREE.Mesh(new THREE.BoxGeometry(barLen, 0.5, 0.2), railMat);
+        bar.position.set(cxg, 1.15, czg); bar.rotation.y = -tan; bar.castShadow = true; scene.add(bar);
+        ownedGeoms.push(bar.geometry);
+        rec.bar = bar;
+        const steps = Math.max(4, Math.round(barLen / 2));
+        for (let s2 = 0; s2 <= steps; s2++) {
+          const tt2 = s2 / steps - 0.5;
+          circles.push({ x: cxg + tx * tt2 * barLen, z: czg + tz * tt2 * barLen, r: 1.5, gate: g.key });
+        }
+      }
+      // Two security guards flank each gate (just OUTSIDE, facing approaching
+      // visitors) — they man the checkpoint. Plus a civilian or two queuing.
+      const out = faceOut(g.a);
+      for (const sgn of [-1, 1]) {
+        placeGuard(cxg + Math.cos(g.a) * 4 + tx * sgn * (halfGapM - 2),
+                   czg + Math.sin(g.a) * 4 + tz * sgn * (halfGapM - 2), out);
+      }
+      const perGate = q.tier === 'low' ? 0 : 1;
+      for (let k = 0; k < perGate; k++) {
+        placeNPC(cxg + Math.cos(g.a) * 8 + tx * 5, czg + Math.sin(g.a) * 8 + tz * 5,
+                 (g.hue + 40) % 360, STYLES[k % 3], out);
+      }
+    }
+
+    // Dense perimeter guard line — a security officer every few metres along the
+    // WHOLE fence. Instanced (simplified body/head/cap) so hundreds of guards cost
+    // only a few draw calls. Skips the gate gaps (those have detailed guards).
+    (function perimeterGuards() {
+      const spacing = q.tier === 'low' ? 14 : q.tier === 'mid' ? 9 : 6;
+      const ringR = FENCE_R + 2.4;
+      const slots = [];
+      const gn = Math.max(8, Math.round((2 * Math.PI * ringR) / spacing));
+      for (let i = 0; i < gn; i++) {
+        const a = (i / gn) * Math.PI * 2;
+        if (!inGap(a)) slots.push(a);
+      }
+      const N = slots.length;
+      if (!N) return;
+      const bodyGeo = new THREE.CylinderGeometry(0.18, 0.27, 1.5, 8).translate(0, 0.75, 0);
+      const headGeo = new THREE.SphereGeometry(0.21, 10, 10).translate(0, 1.62, 0);
+      const capG = new THREE.CylinderGeometry(0.24, 0.28, 0.18, 10).translate(0, 1.84, 0);
+      ownedGeoms.push(bodyGeo, headGeo, capG);
+      const bodyMat = new THREE.MeshStandardMaterial({ color: hsl(212, 0.2, 0.33), roughness: 0.7, metalness: 0.1 });
+      const headMat = new THREE.MeshStandardMaterial({ color: hsl(28, 0.32, 0.6), roughness: 0.85 });
+      const capM = new THREE.MeshStandardMaterial({ color: hsl(212, 0.25, 0.18), roughness: 0.8 });
+      localMats.push(bodyMat, headMat, capM);
+      const body = new THREE.InstancedMesh(bodyGeo, bodyMat, N);
+      const head = new THREE.InstancedMesh(headGeo, headMat, N);
+      const capI = new THREE.InstancedMesh(capG, capM, N);
+      const m = new THREE.Matrix4(), qq = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0),
+            pos = new THREE.Vector3(), scl = new THREE.Vector3(1, 1, 1);
+      for (let i = 0; i < N; i++) {
+        const a = slots[i];
+        qq.setFromAxisAngle(up, faceOut(a));
+        pos.set(Math.cos(a) * ringR, 0, Math.sin(a) * ringR);
+        m.compose(pos, qq, scl);
+        body.setMatrixAt(i, m); head.setMatrixAt(i, m); capI.setMatrixAt(i, m);
+      }
+      for (const im of [body, head, capI]) {
+        im.instanceMatrix.needsUpdate = true;
+        im.matrixAutoUpdate = false; im.updateMatrix();
+        scene.add(im); ownedInstanced.push(im);
+      }
+    })();
+    // Guide the guest: a short file of guards in the apron north of the spawn,
+    // shepherding new arrivals down to the North gate's checkpoint.
+    if (gated) {
+      for (let k = 0; k < 3; k++) {
+        placeGuard(k % 2 ? 3.6 : -3.6, -(FENCE_R + 13 - k * 3), 0);   // face +z, toward the gate
+      }
+    }
+    // A few civilians milling for life.
+    const extra = q.tier === 'low' ? 0 : 5;
+    for (let i = 0; i < extra; i++) {
+      const a = (i / extra) * Math.PI * 2 + 0.9;
+      if (inGap(a)) continue;
+      const rr = FENCE_R + 8 + hash01(i * 5.3, 2.1) * 14;
+      placeNPC(Math.cos(a) * rr, Math.sin(a) * rr, (i * 53) % 360, STYLES[i % 3], faceOut(a));
+    }
   }
 
   // ════════════════════════ Landmark builders ═══════════════════════════════
@@ -1077,8 +1448,104 @@ export function createVeyraWorld(container, opts) {
     const dens = q.tier === 'low' ? 0.4 : q.tier === 'mid' ? 0.7 : 1;
     const add = (g) => { if (g) { g.matrixAutoUpdate = false; g.updateMatrix(); scene.add(g); itemGroups.push(g); } };
 
+    // Awnings: instanced citykit GLB when loaded (self-scaled from its bbox so a
+    // wrong native size can't make them huge/tiny), else the procedural builder.
+    // awnP is façade-gated (Task 2) so neither path floats over open ground.
+    const addAwnings = (places) => {
+      if (!places || !places.length) return;
+      let src = null;
+      if (kit.has('build:detail-awning')) {
+        const root = kit.get('build:detail-awning');
+        root.traverse((o) => { if (o.isMesh && !src) src = o; });
+      }
+      if (src) {
+        src.geometry.computeBoundingBox();
+        const bb = src.geometry.boundingBox;
+        const nativeW = Math.max(bb.max.x - bb.min.x, bb.max.z - bb.min.z) || 1;
+        const s = 2.6 / nativeW;                 // normalize to ~2.6 m wide
+        const lift = 2.4 - bb.min.y * s;          // seat ~2.4 m up the façade
+        const inst = new THREE.InstancedMesh(src.geometry, src.material, places.length);
+        inst.castShadow = true; inst.frustumCulled = false;
+        const mm = new THREE.Matrix4(), p2 = new THREE.Vector3(), qq = new THREE.Quaternion(), ss = new THREE.Vector3(s, s, s), ee = new THREE.Euler();
+        for (let i = 0; i < places.length; i++) {
+          const p = places[i];
+          p2.set(p.x, lift, p.z); ee.set(0, p.ry, 0); qq.setFromEuler(ee);
+          mm.compose(p2, qq, ss); inst.setMatrixAt(i, mm);
+        }
+        inst.instanceMatrix.needsUpdate = true; inst.matrixAutoUpdate = false; inst.updateMatrix();
+        scene.add(inst); itemGroups.push(inst);
+        return;
+      }
+      add(items.awnings(places));   // procedural fallback
+    };
+
     const lampP = [], bikeP = [], peopleP = [], signP = [], awnP = [], planterP = [], stallP = [], cafeP = [];
+    const bikeP2 = [], vendP = [];   // bicycles, shoulder-pole vendors (Task 7)
     const poleRuns = [];
+
+    // ── Building lookups: reject placements that fall inside (or just inside the
+    //    margin of) any real building footprint, and let dressing find a façade. ──
+    const ptInPoly = (poly, x, z) => {
+      let inside = false;
+      for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+        const xi = poly[i][0], zi = poly[i][1], xj = poly[j][0], zj = poly[j][1];
+        if (((zi > z) !== (zj > z)) && (x < (xj - xi) * (z - zi) / (zj - zi) + xi)) inside = !inside;
+      }
+      return inside;
+    };
+    // Distance² from (x,z) to the nearest edge of poly (used for margin / façade).
+    const edgeDist2 = (poly, x, z) => {
+      let best = Infinity;
+      for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+        const ax = poly[j][0], az = poly[j][1], ex = poly[i][0] - ax, ez = poly[i][1] - az;
+        const L2 = ex * ex + ez * ez || 1;
+        let tt = ((x - ax) * ex + (z - az) * ez) / L2; tt = tt < 0 ? 0 : tt > 1 ? 1 : tt;
+        const dx = x - (ax + ex * tt), dz = z - (az + ez * tt);
+        const d2 = dx * dx + dz * dz; if (d2 < best) best = d2;
+      }
+      return best;
+    };
+    // Inside a building, or within margin `m` of its wall? Cheap bbox pre-filter.
+    const pointInBuildings = (x, z, m = 0.6) => {
+      for (let b = 0; b < buildingPolys.length; b++) {
+        const bp = buildingPolys[b];
+        if (x < bp.minx - m || x > bp.maxx + m || z < bp.minz - m || z > bp.maxz + m) continue;
+        if (ptInPoly(bp.poly, x, z)) return true;
+        if (m > 0 && edgeDist2(bp.poly, x, z) < m * m) return true;
+      }
+      return false;
+    };
+    // Is there a building façade within `r` metres? Gates awnings / hanging signs
+    // so they never float over open ground.
+    const facadeWithin = (x, z, r = 3.5) => {
+      const r2 = r * r;
+      for (let b = 0; b < buildingPolys.length; b++) {
+        const bp = buildingPolys[b];
+        if (x < bp.minx - r || x > bp.maxx + r || z < bp.minz - r || z > bp.maxz + r) continue;
+        if (edgeDist2(bp.poly, x, z) < r2) return true;
+      }
+      return false;
+    };
+    // ── Min-spacing grid: reject a placement too close to an already-placed
+    //    sibling (kills double-dressing where roads share junction vertices). ──
+    const SPACE_CELL = 3;
+    const spaceGrid = new Map();
+    const spacingOk = (x, z, minDist) => {
+      const md2 = minDist * minDist;
+      const gx = Math.floor(x / SPACE_CELL), gz = Math.floor(z / SPACE_CELL);
+      for (let ax = gx - 1; ax <= gx + 1; ax++) for (let az = gz - 1; az <= gz + 1; az++) {
+        const arr = spaceGrid.get(ax + '_' + az); if (!arr) continue;
+        for (let i = 0; i < arr.length; i++) {
+          const dx = x - arr[i][0], dz = z - arr[i][1];
+          if (dx * dx + dz * dz < md2) return false;
+        }
+      }
+      return true;
+    };
+    const spaceAdd = (x, z) => {
+      const gx = Math.floor(x / SPACE_CELL), gz = Math.floor(z / SPACE_CELL);
+      const k = gx + '_' + gz; let a = spaceGrid.get(k); if (!a) { a = []; spaceGrid.set(k, a); } a.push([x, z]);
+    };
 
     for (const r of roadList) {
       const pts = r.pts;
@@ -1111,9 +1578,13 @@ export function createVeyraWorld(container, opts) {
           lampAcc += STEP;
           if (lampAcc >= 34) {
             lampAcc = 0; lampSide = -lampSide;
-            lampP.push({ x: px + nx * (hw + 0.8) * lampSide, z: pz + nz * (hw + 0.8) * lampSide });
-            if (hash01(px + 7.1, pz - 4.4) < 0.5) {
-              planterP.push({ x: px + nx * (hw + 0.5) * lampSide + tx * 1.4, z: pz + nz * (hw + 0.5) * lampSide + tz * 1.4 });
+            const lx = px + nx * (hw + 0.8) * lampSide, lz = pz + nz * (hw + 0.8) * lampSide;
+            if (!pointInBuildings(lx, lz, 0.4) && spacingOk(lx, lz, 6)) {
+              lampP.push({ x: lx, z: lz }); spaceAdd(lx, lz);
+              if (hash01(px + 7.1, pz - 4.4) < 0.5) {
+                const plx = px + nx * (hw + 0.5) * lampSide + tx * 1.4, plz = pz + nz * (hw + 0.5) * lampSide + tz * 1.4;
+                if (!pointInBuildings(plx, plz, 0.4) && spacingOk(plx, plz, 1.5)) { planterP.push({ x: plx, z: plz }); spaceAdd(plx, plz); }
+              }
             }
           }
 
@@ -1132,11 +1603,10 @@ export function createVeyraWorld(container, opts) {
               if (hash01(px * 1.1 + side * 3.7, pz * 1.1 - 2.9) < 0.7 * dens) {
                 const rowLen = 1 + Math.floor(hash01(px + side * 5.5, pz + 2.2) * 3); // 2..4 bikes
                 for (let k = 0; k <= rowLen; k++) {
-                  bikeP.push({
-                    x: px + nx * (hw - 0.6) * side + tx * k * 0.85,
-                    z: pz + nz * (hw - 0.6) * side + tz * k * 0.85,
-                    ry: ry + (Math.PI / 2) * side,
-                  });
+                  const bx = px + nx * (hw - 0.6) * side + tx * k * 0.85;
+                  const bz = pz + nz * (hw - 0.6) * side + tz * k * 0.85;
+                  if (pointInBuildings(bx, bz, 0.3)) continue;
+                  bikeP.push({ x: bx, z: bz, ry: ry + (Math.PI / 2) * side });
                 }
               }
             }
@@ -1155,8 +1625,24 @@ export function createVeyraWorld(container, opts) {
             const side = hash01(px + 3.3, pz - 1.1) < 0.5 ? 1 : -1;
             const sx = px + nx * (hw + 0.4) * side, sz = pz + nz * (hw + 0.4) * side;
             const sry = ry + (Math.PI / 2) * side;
-            awnP.push({ x: sx, z: sz, ry: sry, w: 2 + hash01(px, pz + 1.7) * 2 });
-            signP.push({ x: sx, z: sz, ry: sry, hue: hash01(px + 4.4, pz - 3.3) * 360 });
+            // Only attach when an actual building wall is close behind this point.
+            if (facadeWithin(sx, sz, 3.5)) {
+              awnP.push({ x: sx, z: sz, ry: sry, w: 2 + hash01(px, pz + 1.7) * 2 });
+              signP.push({ x: sx, z: sz, ry: sry, hue: hash01(px + 4.4, pz - 3.3) * 360 });
+            }
+          }
+
+          // occasional parked BICYCLE on the curb (Task 7).
+          if (hw >= 2 && hash01(px * 1.3 + 4.1, pz * 1.3 - 6.2) < 0.10 * dens) {
+            const bside = hash01(px + 2.1, pz) < 0.5 ? 1 : -1;
+            const cbx = px + nx * (hw - 0.4) * bside, cbz = pz + nz * (hw - 0.4) * bside;
+            if (!pointInBuildings(cbx, cbz, 0.3) && spacingOk(cbx, cbz, 1.5)) { bikeP2.push({ x: cbx, z: cbz, ry: ry + (Math.PI / 2) * bside }); spaceAdd(cbx, cbz); }
+          }
+          // rare shoulder-pole VENDOR on a sidewalk (Task 7).
+          if (hseed > 0.965 && hseed < 0.985) {
+            const vside = hash01(px + 1.1, pz - 1.1) < 0.5 ? 1 : -1;
+            const vx = px + nx * (hw + 0.7) * vside, vz = pz + nz * (hw + 0.7) * vside;
+            if (!pointInBuildings(vx, vz, 0.4) && spacingOk(vx, vz, 3)) { vendP.push({ x: vx, z: vz, ry: hash01(vx, vz) * Math.PI * 2 }); spaceAdd(vx, vz); }
           }
 
           t += STEP;
@@ -1188,8 +1674,10 @@ export function createVeyraWorld(container, opts) {
             vendAcc = 0;
             const px = a[0] + tx * t, pz = a[1] + tz * t;
             if (hash01(px * 0.5 + 2.7, pz * 0.5 - 5.1) < 0.6 * dens) {
-              stallP.push({ x: px + nx * (hw + 0.8), z: pz + nz * (hw + 0.8), ry: ry - Math.PI / 2 });
-              cafeP.push({ x: px - nx * (hw + 1.0), z: pz - nz * (hw + 1.0), ry: ry + Math.PI / 2 });
+              const stx = px + nx * (hw + 0.8), stz = pz + nz * (hw + 0.8);
+              const cfx = px - nx * (hw + 1.0), cfz = pz - nz * (hw + 1.0);
+              if (!pointInBuildings(stx, stz, 0.8) && spacingOk(stx, stz, 4)) { stallP.push({ x: stx, z: stz, ry: ry - Math.PI / 2 }); spaceAdd(stx, stz); }
+              if (!pointInBuildings(cfx, cfz, 0.8) && spacingOk(cfx, cfz, 4)) { cafeP.push({ x: cfx, z: cfz, ry: ry + Math.PI / 2 }); spaceAdd(cfx, cfz); }
             }
           }
           t += 4;
@@ -1201,8 +1689,10 @@ export function createVeyraWorld(container, opts) {
     for (let i = 0; i < 4; i++) {
       const ox = (hash01(i * 3.1, 1.9) - 0.5) * 60;
       const px = lakeCx + ox, pz = lakeNorthZ - 5 - hash01(i * 2.3, 7.7) * 10;
+      if (!spacingOk(px, pz, 3)) continue;
       if (i % 2 === 0) cafeP.push({ x: px, z: pz, ry: hash01(px, pz) * Math.PI * 2 });
       else stallP.push({ x: px, z: pz, ry: hash01(px + 1, pz) * Math.PI * 2 });
+      spaceAdd(px, pz);
     }
 
     // Caps by tier before building.
@@ -1216,6 +1706,10 @@ export function createVeyraWorld(container, opts) {
     if (planterP.length > 400) planterP.length = 400;
     if (stallP.length > 120) stallP.length = 120;
     if (cafeP.length > 120) cafeP.length = 120;
+    const bike2Cap = q.tier === 'low' ? 60 : q.tier === 'mid' ? 180 : 320;
+    if (bikeP2.length > bike2Cap) bikeP2.length = bike2Cap;
+    const vendCap = q.tier === 'low' ? 12 : q.tier === 'mid' ? 30 : 50;
+    if (vendP.length > vendCap) vendP.length = vendCap;
 
     // Furniture collision (so the player can't walk THROUGH solid items). Pushed
     // here; the spatial grid is built once at the end of build() after these.
@@ -1225,17 +1719,22 @@ export function createVeyraWorld(container, opts) {
     for (const p of cafeP) circles.push({ x: p.x, z: p.z, r: 1.3 });
     for (const p of planterP) circles.push({ x: p.x, z: p.z, r: 0.5 });
     for (const p of bikeP) circles.push({ x: p.x, z: p.z, r: 0.6 });
+    for (const p of bikeP2) circles.push({ x: p.x, z: p.z, r: 0.5 });
+    for (const p of vendP) circles.push({ x: p.x, z: p.z, r: 0.6 });
 
-    // Build + add (each builder returns a Group).
+    // Build + add (each builder returns a Group). Awnings use a GLB path when the
+    // citykit detail is loaded (Task 12); otherwise the procedural builder.
     add(items.lampPosts(lampP));
     for (const run of poleRuns) add(items.powerLines(run));
     add(items.motorbikes(bikeP));
     add(items.people(peopleP));
-    add(items.awnings(awnP));
+    addAwnings(awnP);
     add(items.hangingSigns(signP));
     add(items.planters(planterP));
     add(items.stalls(stallP));
     add(items.cafes(cafeP));
+    add(items.bicycles(bikeP2));
+    add(items.vendors(vendP));
   }
 
   // Find a road vertex near the lake's north shore to spawn on (real street).
@@ -1254,15 +1753,6 @@ export function createVeyraWorld(container, opts) {
     return { x: lakeCx, z: northZ - 16 };          // fallback: just off the north shore
   }
 
-  // ─────────────── coins (helpers used by both build + loop) ───────────────
-  const coinMat = new THREE.MeshStandardMaterial({ color: 0xf3cd84, emissive: 0x8a6a1e, emissiveIntensity: 0.25, metalness: 0.7, roughness: 0.35 });
-  localMats.push(coinMat);
-  function spawnCoin(x, z, mat) {
-    const g = new THREE.Group(); g.position.set(x, 0.95, z);
-    const c = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.32, 0.06, 18), mat || coinMat); c.rotation.x = Math.PI / 2; c.castShadow = true; g.add(c);
-    scene.add(g); coins.push({ g, base: 0.95, x, z });
-  }
-
   // ── Input: keyboard + joystick (shared) ──────────────────
   const kb = createKeyboard();
   const stick = createJoystick(container);
@@ -1273,6 +1763,12 @@ export function createVeyraWorld(container, opts) {
   // player can survey the whole city from above or drop to street level. The zoom
   // step scales with distance so it stays pleasant across the huge range.
   let camYaw = 0, camElev = 0.42, camDist = 46, camDcur = 46;
+  // Cinematic smoothing state: damped orbit angles, a trailing look target, and a
+  // player-speed estimate feeding a subtle dynamic FOV.
+  let camYawCur = camYaw, camElevCur = camElev;
+  const lookTarget = new THREE.Vector3(); let lookInit = false;
+  const baseFov = camera.fov;
+  let prevPx = 0, prevPz = 0, camSpeed = 0;
   const clampDist = (d) => Math.max(CAM_MIN, Math.min(CAM_MAX, d));
   const dom = renderer.domElement;
   const orbit = { pointers: new Map(), lastDist: 0 };
@@ -1386,7 +1882,7 @@ export function createVeyraWorld(container, opts) {
   // real-time tod + the mild default weather already set.
   function fetchWeather() {
     if (disposed) return;
-    fetch('https://api.open-meteo.com/v1/forecast?latitude=21.0287&longitude=105.8524&current=temperature_2m,weather_code,wind_speed_10m,cloud_cover,is_day&timezone=Asia%2FHo_Chi_Minh')
+    fetch('https://api.open-meteo.com/v1/forecast?latitude=21.0287&longitude=105.8524&current=temperature_2m,weather_code,wind_speed_10m,wind_direction_10m,cloud_cover,is_day&timezone=Asia%2FHo_Chi_Minh')
       .then((r) => { if (!r.ok) throw new Error('open-meteo ' + r.status); return r.json(); })
       .then((j) => {
         if (disposed) return;
@@ -1399,6 +1895,8 @@ export function createVeyraWorld(container, opts) {
         const m = mapWeatherCode(code, cloud);
         curOvercast = m.overcast; curRain = m.rain;
         windAmt = Math.max(0, Math.min(1, windKmh / 40));
+        const windDeg = c.wind_direction_10m;
+        if (typeof windDeg === 'number') windDir = (windDeg * Math.PI) / 180;
         environment.setWeather({ overcast: curOvercast, rain: curRain });
         applyFog(curOvercast);
         emitWeather(tempC, m, windKmh);
@@ -1417,6 +1915,9 @@ export function createVeyraWorld(container, opts) {
   // ── Loop ─────────────────────────────────────────────────
   const SPEED = 6.2;
   const camTarget = new THREE.Vector3(), tmp = new THREE.Vector3(), camPos = new THREE.Vector3();
+  // Hoisted scratch for the per-frame bird flock (no per-frame allocation).
+  const _birdPos = new THREE.Vector3(), _birdFwd = new THREE.Vector3(), _birdQuat = new THREE.Quaternion();
+  const _birdMat = new THREE.Matrix4(), _birdScl = new THREE.Vector3(1, 1, 1), _birdZ = new THREE.Vector3(0, 0, 1);
   let phase = 0, near = null, last = performance.now(), miniAccum = 0;
 
   function step(now) {
@@ -1452,7 +1953,17 @@ export function createVeyraWorld(container, opts) {
       pp.x += mvx * SPEED * dt; pp.z += mvz * SPEED * dt;
 
       const pr = Math.hypot(pp.x, pp.z);
-      if (pr > MAXR) { const s = MAXR / pr; pp.x *= s; pp.z *= s; }
+      if (entered) {
+        if (pr > MAXR) { const s = MAXR / pr; pp.x *= s; pp.z *= s; }
+      } else {
+        // Guest: kept in the clean apron just OUTSIDE the fence. The fence + the
+        // closed gate barriers (collision circles below) stop them crossing in
+        // anywhere except a gate whose ticket has been accepted.
+        const OUTER = fenceR + 30;
+        if (pr > OUTER) { const s = OUTER / pr; pp.x *= s; pp.z *= s; }
+        // Walked inward through an opened gate → now inside the city for good.
+        if (pr < fenceR - 6) entered = true;
+      }
 
       const rad = 0.5;
       if (grid) {
@@ -1461,6 +1972,7 @@ export function createVeyraWorld(container, opts) {
           const arr = grid.get(gx + '_' + gz); if (!arr) continue;
           for (let n = 0; n < arr.length; n++) {
             const b = circles[arr[n]];
+            if (b.gate && openGates[b.gate]) continue;   // this gate's ticket cleared — let them pass
             const dx = pp.x - b.x, dz = pp.z - b.z; const dd = Math.hypot(dx, dz) || 1;
             if (dd < b.r + rad) { pp.x = b.x + dx / dd * (b.r + rad); pp.z = b.z + dz / dd * (b.r + rad); }
           }
@@ -1563,29 +2075,80 @@ export function createVeyraWorld(container, opts) {
       }
       if (hit < hd) wantD = Math.max(2.4, (hit - 0.5) / hCos);
     }
+    // Frame-rate-independent damping helper.
+    const damp = (cur, target, lambda) => cur + (target - cur) * (1 - Math.exp(-lambda * dt));
+
     // Pull in fast (prevent clipping), ease back out slowly (no pop).
     camDcur += (wantD - camDcur) * Math.min(1, dt * (wantD < camDcur ? 18 : 3));
-    const offX = camDcur * Math.cos(camElev) * Math.sin(camYaw);
-    const offZ = camDcur * Math.cos(camElev) * Math.cos(camYaw);
-    const offY = camDcur * Math.sin(camElev);
+    // Damp the orbit angles so drags feel weighty, not twitchy.
+    camYawCur = damp(camYawCur, camYaw, 10);
+    camElevCur = damp(camElevCur, camElev, 10);
+    // Player planar speed → a subtle dynamic FOV kick when moving fast.
+    const instSpeed = Math.hypot(pp.x - prevPx, pp.z - prevPz) / Math.max(dt, 1e-3);
+    prevPx = pp.x; prevPz = pp.z;
+    camSpeed = damp(camSpeed, instSpeed, 6);
+    const fovTarget = baseFov + Math.min(4, camSpeed * 0.5);
+    camera.fov += (fovTarget - camera.fov) * Math.min(1, dt * 4);
+    camera.updateProjectionMatrix();
+
+    const offX = camDcur * Math.cos(camElevCur) * Math.sin(camYawCur);
+    const offZ = camDcur * Math.cos(camElevCur) * Math.cos(camYawCur);
+    const offY = camDcur * Math.sin(camElevCur);
     camTarget.set(pp.x + offX, pp.y + offY + 1.2, pp.z + offZ);
+    if (camTarget.y < 0.8) camTarget.y = 0.8;     // ground/lake clamp
     camera.position.lerp(camTarget, Math.min(1, dt * 6));
-    tmp.set(pp.x, pp.y + 1.5, pp.z); camera.lookAt(tmp);
+    if (camera.position.y < 0.8) camera.position.y = 0.8;
+    // Smoothed look target trails the player slightly for a cinematic feel.
+    tmp.set(pp.x, pp.y + 1.5, pp.z);
+    if (!lookInit) { lookTarget.copy(tmp); lookInit = true; }
+    lookTarget.x = damp(lookTarget.x, tmp.x, 12);
+    lookTarget.y = damp(lookTarget.y, tmp.y, 12);
+    lookTarget.z = damp(lookTarget.z, tmp.z, 12);
+    camera.lookAt(lookTarget);
     camPos.copy(camera.position);
+
+    // Lake ripples (speed/chop tied to the real wind), tree sway, night glow, birds.
+    if (water) {
+      const u = water.material.uniforms;
+      u.time.value += dt * (0.4 + windAmt * 1.6);
+      if (u.normalSampler && u.normalSampler.value) {
+        u.normalSampler.value.offset.set(Math.cos(windDir) * u.time.value * 0.02, Math.sin(windDir) * u.time.value * 0.02);
+      }
+      u.distortionScale.value = 1.2 + windAmt * 3.0;
+      if (environment.sunDir) u.sunDirection.value.copy(environment.sunDir);
+    }
+    swayUniforms.uTime.value = t;
+    swayUniforms.uWind.value = windAmt;
+    swayUniforms.uWindDir.value = windDir;
+    // Night factor from real sun elevation: glow ramps up as the sun sets.
+    const sunElev = environment.getSunElevation ? environment.getSunElevation() : 1;
+    items.setNightFactor && items.setNightFactor(Math.max(0, Math.min(1, 1 - sunElev / 0.5)));
+    if (birdMesh) {
+      for (let i = 0; i < birdParams.length; i++) {
+        const bp = birdParams[i];
+        const ang = t * bp.sp + bp.ph;
+        const bx = bp.cx + Math.cos(ang) * bp.r, bz = bp.cz + Math.sin(ang) * bp.r;
+        const by = bp.h + Math.sin(t * 1.3 + bp.ph) * 1.2;
+        _birdPos.set(bx, by, bz);
+        _birdFwd.set(-Math.sin(ang), 0, Math.cos(ang));
+        _birdQuat.setFromUnitVectors(_birdZ, _birdFwd);
+        _birdMat.compose(_birdPos, _birdQuat, _birdScl);
+        birdMesh.setMatrixAt(i, _birdMat);
+      }
+      birdMesh.instanceMatrix.needsUpdate = true;
+    }
 
     for (let i = 0; i < interactables.length; i++) {
       const it = interactables[i];
-      if (!it.marker) continue;
-      it.marker.rotation.z = t * 1.0 + i;
-      it.marker.position.y = it.markerBaseY + Math.sin(t * 1.4 + i) * 0.12;
-    }
-
-    for (let ci = coins.length - 1; ci >= 0; ci--) {
-      const co = coins[ci];
-      co.g.rotation.y += dt * 2.4;
-      co.g.position.y = co.base + Math.sin(t * 2 + ci) * 0.12;
-      const cd = Math.hypot(pp.x - co.x, pp.z - co.z);
-      if (cd < 1.5) { scene.remove(co.g); co.g.children[0].geometry.dispose(); coins.splice(ci, 1); opts.onCoin && opts.onCoin(5); }
+      if (it.marker) {
+        it.marker.rotation.z = t * 1.0 + i;
+        it.marker.position.y = it.markerBaseY + Math.sin(t * 1.4 + i) * 0.12;
+      }
+      if (it.glow) {
+        it.glowMat.opacity = 0.35 + 0.25 * (0.5 + 0.5 * Math.sin(t * 2.2 + i));
+        const gs = 1 + 0.08 * Math.sin(t * 2.2 + i);
+        it.glow.scale.set(gs, gs, gs);
+      }
     }
 
     let best = null, bestD = Infinity;
@@ -1598,6 +2161,24 @@ export function createVeyraWorld(container, opts) {
     if (id !== (near && near.id)) {
       near = best;
       opts.onProximity && opts.onProximity(best ? { id: best.id, name: best.name, type: best.type } : null);
+    }
+
+    // Gate proximity for guests (outside the fence): present the ticket when the
+    // player reaches a gate guard. Cleared once they're inside.
+    if (!entered && fenceGates.length) {
+      let gBest = null, gBestD = 999;
+      for (const fg of fenceGates) {
+        const d = Math.hypot(pp.x - fg.x, pp.z - fg.z);
+        if (d < 11 && d < gBestD) { gBestD = d; gBest = fg; }
+      }
+      const gk = gBest ? gBest.key : null;
+      if (gk !== (nearGate && nearGate.key)) {
+        nearGate = gBest;
+        opts.onGate && opts.onGate(gBest ? { key: gBest.key, label: gBest.label } : null);
+      }
+    } else if (entered && nearGate) {
+      nearGate = null;
+      opts.onGate && opts.onGate(null);
     }
 
     // Time-of-day + weather are driven by REAL data (the intervals above call
@@ -1657,8 +2238,9 @@ export function createVeyraWorld(container, opts) {
   //    fallback (ground + nominal lake + landmarks) so onReady always fires. ──
   fetch('/data/hanoi.json')
     .then((res) => { if (!res.ok) throw new Error('hanoi.json ' + res.status); return res.json(); })
-    .then((data) => { build(data); })
-    .catch(() => { build(null); });
+    .then((data) => build(data))      // build() is async now — return it so failures propagate
+    .catch(() => build(null))         // fetch/json OR build failure → minimal fallback build
+    .catch(() => { /* even the fallback failed; never throw out of the loader */ });
 
   // ── API ──────────────────────────────────────────────────
   return {
@@ -1676,14 +2258,31 @@ export function createVeyraWorld(container, opts) {
       environment.dispose();
       mats.dispose();
       facades.dispose(); items.dispose();
+      // External-asset loaders + the reflective lake (its reflection RT + material).
+      if (water) {
+        scene.remove(water);
+        water.geometry?.dispose?.();
+        water.material?.dispose?.();
+        water.getRenderTarget?.()?.dispose?.();
+        water = null;
+      }
+      if (waterNormals) { waterNormals.dispose(); waterNormals = null; }
+      texer.dispose();
+      kit.dispose();
       for (const m of localMats) m.dispose();
       for (const im of ownedInstanced) im.dispose();   // frees instance attribute buffers
       for (const g of ownedGeoms) g.dispose();
+      for (const tx of ownedTextures) tx.dispose();
       for (const g of itemGroups) g.traverse((o) => { if (o.isInstancedMesh) o.dispose(); });
       disposeScene(scene);
       renderer.dispose();
       if (renderer.domElement.parentNode) renderer.domElement.parentNode.removeChild(renderer.domElement);
       if (mini.parentNode) mini.parentNode.removeChild(mini);
+    },
+    // Ticket accepted at gate `key`: drop its barrier so the guest can walk in.
+    openGate(key) {
+      openGates[key] = true;
+      for (const fg of fenceGates) if (fg.key === key && fg.bar) fg.bar.visible = false;
     },
     recenter() {
       if (!player) return;

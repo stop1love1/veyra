@@ -127,6 +127,7 @@ export const STR: Record<string, Localized> = {
   ticketChecking: { vi: 'Bảo vệ đang soát vé…',    en: 'Guard is checking…' },
   ticketInvalid:  { vi: 'Vé không hợp lệ — thử lại.', en: 'Invalid ticket — try again.' },
   ticketValid:    { vi: 'Vé hợp lệ! Mời vào.',      en: 'Ticket valid! Come in.' },
+  gate:           { vi: 'Cổng',                      en: 'Gate' },
 
   // ── Avatar style options (shared by CreateScreen + GuardDialogue) ──
   styleMinimal:   { vi: 'Tối giản',                en: 'Minimal' },

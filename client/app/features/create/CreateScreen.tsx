@@ -28,6 +28,18 @@ export function CreateScreen({ g }: { g: Game }) {
       </div>
 
       <div className="v-create-sheet">
+        {g.auth.user && (
+          <div className="v-create-acct">
+            <Avatar hue={g.player.hue} size={38} />
+            <div className="v-create-acct-id">
+              <span className="v-create-acct-name">{g.auth.user.name || g.auth.user.email}</span>
+              <span className="v-create-acct-mail">{g.auth.user.email}</span>
+            </div>
+            <Btn variant="soft" size="sm" icon="power"
+                 onClick={() => { g.auth.logout(); g.flash(g.t('loggedOut')); }}>{g.t('signOut')}</Btn>
+          </div>
+        )}
+
         <label className="v-field">
           <span className="v-field-label">{g.t('yourName')}</span>
           <input className="v-input" value={name} maxLength={16}

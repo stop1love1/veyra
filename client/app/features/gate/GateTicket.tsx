@@ -8,7 +8,7 @@ import type { Game } from '../../lib/game/types';
 
 type Status = 'idle' | 'checking' | 'rejected';
 
-export function GateTicket({ g, onValid }: { g: Game; onValid: () => void }) {
+export function GateTicket({ g, onValid, gate }: { g: Game; onValid: () => void; gate?: string }) {
   const t = g.t;
   const [tab, setTab] = React.useState<'login' | 'register'>('login');
   const [email, setEmail] = React.useState('');
@@ -44,6 +44,10 @@ export function GateTicket({ g, onValid }: { g: Game; onValid: () => void }) {
       </div>
 
       <div className="v-ticket-main">
+        <div className="v-ticket-guard">
+          <Ic name="shield" size={15} />
+          <span>{gate ? `${t('gate')} ${gate} — ${t('guardAskTicket')}` : t('guardAskTicket')}</span>
+        </div>
         <div className="v-ticket-head">
           <span className="v-mono v-ticket-kicker">{t('ticketTitle')}</span>
           <div className="v-ticket-tabs">

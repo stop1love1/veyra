@@ -195,6 +195,12 @@ button:focus-visible,a:focus-visible,input:focus-visible,
 .v-avatar-pedestal::after{content:"";position:absolute;bottom:-26px;left:50%;transform:translateX(-50%);width:150px;height:34px;border-radius:50%;
   background:radial-gradient(ellipse,color-mix(in oklab,var(--brand),transparent 50%),transparent 70%);filter:blur(3px);}
 .v-create-hint{color:rgba(234,252,248,.45);}
+/* Signed-in account row at the top of the character sheet (inline logout). */
+.v-create-acct{display:flex;align-items:center;gap:11px;padding:11px 13px;border:1px solid var(--line);
+  border-radius:var(--radius-sm);background:var(--paper-2);}
+.v-create-acct-id{display:flex;flex-direction:column;min-width:0;flex:1;line-height:1.3;}
+.v-create-acct-name{font-size:14px;font-weight:700;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.v-create-acct-mail{font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .v-create-sheet{position:absolute;left:0;right:0;bottom:0;background:var(--paper);border-radius:28px 28px 0 0;
   padding:26px 22px 38px;display:flex;flex-direction:column;gap:20px;box-shadow:0 -20px 50px rgba(0,0,0,.3);height:54%;overflow-y:auto;}
 
@@ -643,6 +649,41 @@ button:focus-visible,a:focus-visible,input:focus-visible,
 .v-guard-actions{display:flex;gap:10px;}
 .v-guard-actions .v-btn{flex:1;}
 
+/* ─── Gate ticket (diegetic login/register at a perimeter gate) ───── */
+.v-ticket{position:absolute;left:50%;bottom:20px;transform:translateX(-50%);z-index:18;
+  width:min(460px,calc(100% - 24px));box-sizing:border-box;display:flex;overflow:hidden;
+  background:rgba(255,255,255,.93);backdrop-filter:blur(24px) saturate(160%);-webkit-backdrop-filter:blur(24px) saturate(160%);
+  border:1px solid rgba(255,255,255,.65);border-radius:20px;box-shadow:0 22px 56px rgba(6,20,20,.55);
+  animation:slideup-card .3s cubic-bezier(.2,.8,.2,1);}
+.v-ticket-stub{flex:none;width:60px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;
+  padding:14px 6px;color:#eafcf8;background:linear-gradient(160deg,var(--brand-strong),#0c2c2a);
+  border-right:2px dashed rgba(255,255,255,.5);}
+.v-ticket-stub-id{font-size:11px;font-weight:800;letter-spacing:.12em;writing-mode:vertical-rl;transform:rotate(180deg);}
+.v-ticket-stub-sub{font-size:8px;opacity:.7;letter-spacing:.1em;}
+.v-ticket-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:10px;padding:13px 15px 15px;}
+.v-ticket-guard{display:flex;align-items:center;gap:8px;font-size:12.5px;line-height:1.35;color:var(--text);
+  background:var(--paper-2);border-radius:12px 12px 12px 4px;padding:9px 11px;}
+.v-ticket-guard svg{color:var(--brand-ink);flex:none;}
+.v-ticket-head{display:flex;align-items:center;justify-content:space-between;gap:10px;}
+.v-ticket-kicker{color:var(--brand-ink);font-size:10px;}
+.v-ticket-tabs{display:flex;gap:4px;background:var(--paper-2);border-radius:999px;padding:3px;}
+.v-ticket-tab{border:none;background:none;cursor:pointer;font-family:inherit;font-size:12px;font-weight:700;color:var(--muted);
+  padding:6px 12px;border-radius:999px;transition:.15s;}
+.v-ticket-tab.is-on{background:var(--text);color:var(--paper);}
+.v-ticket-field{display:flex;flex-direction:column;gap:5px;}
+.v-ticket-label{font-size:11px;font-weight:600;color:var(--muted);}
+.v-ticket-field .v-input{padding:10px 12px;font-size:14px;}
+.v-ticket-seller{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:var(--text);cursor:pointer;}
+.v-ticket-err{margin:0;color:var(--danger,#e2554f);font-size:13px;font-weight:600;}
+
+/* Guest wayfinding hint (top-centre) — points to the four cardinal gates. */
+.v-gatehint{position:absolute;top:calc(max(7px,env(safe-area-inset-top)) + 56px);left:50%;transform:translateX(-50%);z-index:18;
+  display:inline-flex;align-items:center;gap:7px;max-width:calc(100% - 28px);
+  padding:9px 15px;border-radius:999px;background:rgba(16,38,40,.6);border:1px solid rgba(255,255,255,.14);
+  backdrop-filter:blur(12px);color:#eafcf8;font-size:12.5px;font-weight:600;text-align:center;
+  box-shadow:0 8px 22px rgba(0,0,0,.3);}
+.v-gatehint svg{color:var(--brand);flex:none;}
+
 /* ═══ MINIMAP / responsive ───────────────────────────────── */
 @media (min-width:768px){
   /* On wide screens the joystick sits comfortably to the left edge */
@@ -659,7 +700,7 @@ button:focus-visible,a:focus-visible,input:focus-visible,
   .v-loader-ring{opacity:.85;}
   /* Shorten one-shot entrance/pop animations so they don't linger or jar. */
   .v-shopcard,.v-sheet,.v-dgt,.v-flash,.v-enter-prompt,.v-gate-panel,
-  .v-gate-reopen-wrap,.v-gate-hint,.v-guard,.v-success-burst,
+  .v-gate-reopen-wrap,.v-gate-hint,.v-guard,.v-ticket,.v-success-burst,
   .v-dock-btn.is-on,#v-bag-target.is-pop{
     animation-duration:.01ms !important;animation-iteration-count:1 !important;}
   /* Spatial screen transition: collapse every variant to a tiny plain fade,

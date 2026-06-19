@@ -16,7 +16,7 @@ import { Sky } from 'three/addons/objects/Sky.js';
 // How much the sun elevation (radians) must move before we pay for a PMREM re-bake.
 const REGEN_ELEVATION_EPS = 0.035; // ~2 degrees
 
-export function createEnvironment(renderer, scene, { quality } = {}) {
+export function createEnvironment(renderer, scene, { quality, envHdrUrl } = {}) {
   quality = quality || {};
   const shadowMapSize = quality.shadowMapSize || 0;
 
@@ -90,6 +90,8 @@ export function createEnvironment(renderer, scene, { quality } = {}) {
 
   let env = null; // current PMREM render target
   let lastRegenElevation = Number.NEGATIVE_INFINITY;
+  let useHdrEnv = false;   // once an HDRI is bound, the dynamic Sky bake is skipped
+  let hdrEnvRT = null;     // PMREM render target for the HDRI (freed in dispose)
 
   // Spherical sun direction shared between the visible sky, the IBL sky and the light.
   const sunDir = new THREE.Vector3(0, 1, 0);
@@ -113,46 +115,68 @@ export function createEnvironment(renderer, scene, { quality } = {}) {
     lastRegenElevation = curElevation;
   }
 
+  // ── Day/night state (shared by setTimeOfDay + setWeather via applyLighting) ──
+  let curDaylight = 1;      // 0 = full night … 1 = full day (soft twilight band)
+  let curOvercastV = 0;     // remembered overcast so time changes keep weather mood
+  const _horizonCol = new THREE.Color(0xff8a40); // low-sun warm
+  const _zenithCol = new THREE.Color(0xfff6ea);  // high-sun neutral-warm
+  const _nightFog = new THREE.Color(0x0b1622);   // deep blue night haze
+
+  // Apply the combined sun/fill/exposure/IBL response for the current daylight +
+  // overcast. Called whenever either the time of day OR the weather changes so the
+  // two never stomp each other's lighting writes.
+  function applyLighting() {
+    const elev01 = THREE.MathUtils.clamp(curElevation / (Math.PI / 2), 0, 1);
+    const overcast = curOvercastV;
+    // Sun: warm near the horizon, neutral high; intensity falls to ~0 at night.
+    sun.color.copy(_horizonCol).lerp(_zenithCol, Math.pow(elev01, 0.6));
+    sun.intensity = baseSunIntensity * (0.15 + 0.85 * Math.pow(elev01, 0.5)) * curDaylight * weatherSunMul;
+    // Fills: keep a small cool moonlight floor at night so it never goes pitch black.
+    hemi.intensity = THREE.MathUtils.lerp(0.08, THREE.MathUtils.lerp(baseHemiIntensity, 1.1, overcast), curDaylight);
+    hemi.color.setHSL(0.6, 0.5, THREE.MathUtils.lerp(0.35, 0.78, curDaylight)); // cooler/darker at night
+    ambient.intensity = THREE.MathUtils.lerp(0.02, 0.1, curDaylight);
+    // Exposure: dark at night, normal by day, knocked down a touch under cloud.
+    // This scales the WHOLE rendered image (incl. IBL/HDRI-lit surfaces) before
+    // tone mapping, so it carries the night dimming even though three r160 has no
+    // scene.environmentIntensity (the line below is a forward-compatible no-op).
+    renderer.toneMappingExposure = baseExposure
+      * THREE.MathUtils.lerp(0.40, 1.0, curDaylight)
+      * THREE.MathUtils.lerp(1.0, 0.85, overcast);
+    scene.environmentIntensity = THREE.MathUtils.lerp(0.12, 1.0, curDaylight);
+  }
+
   // ── Time of day ───────────────────────────────────────────────────────────
-  // t01: 0 = dawn (sun on horizon, east), 0.5 = noon (overhead), 1 = dusk (west horizon).
+  // t01 maps the REAL 24h clock: 0 = midnight, 0.25 = sunrise, 0.5 = noon,
+  // 0.75 = sunset, 1 = midnight. The sun goes BELOW the horizon at night so the
+  // Preetham sky darkens and the emissive street lamps/lanterns carry the scene.
   function setTimeOfDay(t01) {
     t01 = Math.max(0, Math.min(1, t01));
-
-    // Elevation: rises to zenith at noon, back down at dusk. Keep a hair above the
-    // horizon at the ends so the disc/scattering stays sane.
-    const minElev = 0.03;                  // ~1.7° so we never go fully below horizon
     const maxElev = Math.PI / 2 - 0.12;    // just shy of straight up
-    curElevation = minElev + (maxElev - minElev) * Math.sin(t01 * Math.PI);
+
+    // True solar arc (can be negative at night).
+    const solarElev = maxElev * Math.sin(2 * Math.PI * (t01 - 0.25));
+    // Daylight factor with a soft twilight band straddling the horizon.
+    curDaylight = THREE.MathUtils.clamp((solarElev + 0.12) / 0.34, 0, 1);
+    // For IBL/landmark scaling keep a tiny positive elevation; the sky/light use
+    // the REAL (possibly negative) elevation so night reads as night.
+    curElevation = Math.max(0.02, solarElev);
 
     // Azimuth: sweep east → south → west across the day.
     const azimuth = THREE.MathUtils.degToRad(-90 + 180 * t01);
-
-    // Spherical → cartesian (phi measured from the +Y zenith).
-    const phi = Math.PI / 2 - curElevation;
+    const phi = Math.PI / 2 - solarElev;   // REAL elevation drives the visible sun
     sunDir.set(
       Math.sin(phi) * Math.sin(azimuth),
       Math.cos(phi),
       Math.sin(phi) * Math.cos(azimuth),
     );
-
-    // Drive the visible sky's sun position uniform.
     skyU.sunPosition.value.copy(sunDir);
-
-    // Move the directional light along the sun direction (re-anchored to camera in update).
     sun.position.copy(sunDir).multiplyScalar(120);
 
-    // Tint by elevation: warm/orange near the horizon, neutral white when high.
-    // elev01 in 0..1 across the visible elevation band.
-    const elev01 = THREE.MathUtils.clamp(curElevation / (Math.PI / 2), 0, 1);
-    const horizon = new THREE.Color(0xff8a40); // low-sun warm
-    const zenith = new THREE.Color(0xfff6ea);  // high-sun neutral-warm
-    sun.color.copy(horizon).lerp(zenith, Math.pow(elev01, 0.6));
+    applyLighting();
 
-    // Slightly dim the sun at very low elevations (atmospheric extinction).
-    sun.intensity = baseSunIntensity * THREE.MathUtils.lerp(0.55, 1.0, Math.pow(elev01, 0.5)) * weatherSunMul;
-
-    // Throttle the costly PMREM bake: only when elevation moved enough.
-    if (Math.abs(curElevation - lastRegenElevation) > REGEN_ELEVATION_EPS) {
+    // Throttle the costly PMREM bake: only when elevation moved enough — and never
+    // once a static HDRI env is bound (it supersedes the Sky-baked reflections).
+    if (!useHdrEnv && Math.abs(curElevation - lastRegenElevation) > REGEN_ELEVATION_EPS) {
       regenEnv();
     }
   }
@@ -170,31 +194,27 @@ export function createEnvironment(renderer, scene, { quality } = {}) {
     const overcast = THREE.MathUtils.clamp(w.overcast ?? 0, 0, 1);
     const rain = THREE.MathUtils.clamp(w.rain ?? 0, 0, 1);
     const murk = Math.min(1, overcast + rain * 0.6);
+    curOvercastV = overcast;
 
     // Hazier, milkier sky as it clouds over.
     skyU.turbidity.value = THREE.MathUtils.lerp(baseSky.turbidity, 12, overcast);
     skyU.rayleigh.value = THREE.MathUtils.lerp(baseSky.rayleigh, 0.4, overcast);
-
-    // Suppress the sun; let the hemisphere fill take over as a soft overcast key.
     weatherSunMul = THREE.MathUtils.lerp(1.0, 0.25, overcast);
-    sun.intensity = baseSunIntensity *
-      THREE.MathUtils.lerp(0.55, 1.0, Math.pow(THREE.MathUtils.clamp(curElevation / (Math.PI / 2), 0, 1), 0.5)) *
-      weatherSunMul;
-    hemi.intensity = THREE.MathUtils.lerp(baseHemiIntensity, 1.1, overcast);
 
-    // Knock exposure down a touch under heavy cloud (flatter, cooler light).
-    renderer.toneMappingExposure = baseExposure * THREE.MathUtils.lerp(1.0, 0.85, overcast);
+    // Sun / fills / exposure / IBL come from the shared day+weather response.
+    applyLighting();
 
-    // Fog: tint toward the horizon sky color, denser with murk. Near/far tighten
-    // dramatically in rain to read as a downpour.
-    const fogColor = new THREE.Color(0xc9d4dc).lerp(new THREE.Color(0x8a98a4), murk);
-    fog.color.copy(fogColor);
+    // Fog: by day tint toward the horizon sky and densify with murk; by night sink
+    // toward a deep blue haze so distance reads dark, not milky-grey.
+    const dayFog = new THREE.Color(0xc9d4dc).lerp(new THREE.Color(0x8a98a4), murk);
+    fog.color.copy(dayFog).lerp(_nightFog, 1 - curDaylight);
     fog.near = THREE.MathUtils.lerp(150, 50, murk);
     fog.far = THREE.MathUtils.lerp(680, 260, murk);
 
     // One bake so reflections reflect the new sky mood. setWeather is a discrete,
     // caller-driven event (not per-frame), so a single regen here is intentional.
-    regenEnv();
+    // Skipped once an HDRI env is bound.
+    if (!useHdrEnv) regenEnv();
   }
 
   // ── Per-frame ─────────────────────────────────────────────────────────────
@@ -216,6 +236,7 @@ export function createEnvironment(renderer, scene, { quality } = {}) {
   // ── Teardown ──────────────────────────────────────────────────────────────
   function dispose() {
     if (env) { env.dispose(); env = null; }
+    if (hdrEnvRT) { hdrEnvRT.dispose(); hdrEnvRT = null; }
     scene.environment = null;
     scene.fog = null;
 
@@ -241,8 +262,25 @@ export function createEnvironment(renderer, scene, { quality } = {}) {
   setTimeOfDay(0.5);
   setWeather({ overcast: 0, rain: 0 });
 
+  // Optional HDRI IBL: load async; when ready it replaces the Sky-baked env and
+  // disables the per-frame rebake. Failure is silent (keep dynamic Sky-PMREM).
+  if (envHdrUrl) {
+    import('three/addons/loaders/RGBELoader.js').then(({ RGBELoader }) => {
+      new RGBELoader().load(envHdrUrl, (hdr) => {
+        const gen = new THREE.PMREMGenerator(renderer);
+        gen.compileEquirectangularShader();
+        hdrEnvRT = gen.fromEquirectangular(hdr);
+        hdr.dispose(); gen.dispose();
+        if (env) { env.dispose(); env = null; }   // drop the Sky-baked env
+        scene.environment = hdrEnvRT.texture;
+        useHdrEnv = true;
+      }, undefined, () => { /* keep dynamic Sky-PMREM on failure */ });
+    }).catch(() => {});
+  }
+
   return {
-    sun, hemi, ambient, sky, env,
+    sun, hemi, ambient, sky, env, sunDir,
     setTimeOfDay, setWeather, update, dispose,
+    getSunElevation: () => curElevation,
   };
 }

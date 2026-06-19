@@ -6,13 +6,18 @@ const MOVE_KEYS = ['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arr
 export function createKeyboard() {
   const keys = {};
   const onKey = (e, down) => {
-    // Ignore movement keys while the player is typing in a form field (e.g. the
-    // gate ticket's email/password) — otherwise WASD would be swallowed and the
-    // avatar would walk off mid-login.
-    const tgt = e.target;
-    if (tgt && (tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA' || tgt.isContentEditable)) return;
     const k = e.key.toLowerCase();
-    if (MOVE_KEYS.includes(k)) { keys[k] = down; e.preventDefault(); }
+    if (!MOVE_KEYS.includes(k)) return;
+    // On key-DOWN, ignore movement while typing in a form field (e.g. the gate
+    // ticket's email/password) so WASD isn't swallowed. But ALWAYS process
+    // key-UP — otherwise a key pressed before focusing an input never clears and
+    // the avatar walks on its own.
+    if (down) {
+      const tgt = e.target;
+      if (tgt && (tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA' || tgt.isContentEditable)) return;
+    }
+    keys[k] = down;
+    e.preventDefault();
   };
   const kd = (e) => onKey(e, true);
   const ku = (e) => onKey(e, false);

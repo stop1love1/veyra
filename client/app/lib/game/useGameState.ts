@@ -97,7 +97,9 @@ export function useGameState(): GameState {
 
   const [lang, setLang] = React.useState<Lang>(saved.lang || 'vi');
   const [player, setPlayer] = React.useState<Player>(saved.player || { name: 'Veyra', hue: 184 });
-  const [screen, setScreen] = React.useState<ScreenName>(saved.screen || 'gate');
+  // Default landing is the world itself: unauthenticated players spawn OUTSIDE the
+  // perimeter fence (see worldHanoi) and must pass a gate's ticket check to enter.
+  const [screen, setScreen] = React.useState<ScreenName>(saved.screen || 'world');
   const [params, setParams] = React.useState<ScreenParams>(saved.params || {});
   // Navigation history lives in a ref (it's never rendered) so back() can read
   // the stack synchronously and keep all setState calls out of any updater.
@@ -110,7 +112,7 @@ export function useGameState(): GameState {
   const [npcOpen, setNpc] = React.useState<string | null>(null);
   const [prodOpen, setProd] = React.useState<string | null>(null);
   const [worldPanel, setWorldPanel] = React.useState<WorldPanel | null>(null);
-  const [nav, setNav] = React.useState<NavSignal>({ key: 0, dir: 'forward', from: null, to: saved.screen || 'gate' });
+  const [nav, setNav] = React.useState<NavSignal>({ key: 0, dir: 'forward', from: null, to: saved.screen || 'world' });
   const [flash, setFlash] = React.useState<string | null>(null);
   const [lite] = React.useState<boolean>(() => detectLite());
 
@@ -306,12 +308,12 @@ export function useGameState(): GameState {
     persistUser(null);
     setAuthUser(null);
     setAuthToken(null);
-    // Drop the player back outside the gate and forget where they were, so the
-    // next sign-in goes through the ticket check again (App's auth wall renders
-    // the gate while authUser is null regardless).
+    // Drop the player back into the world as a guest — they respawn OUTSIDE the
+    // perimeter fence (WorldScreen rebuilds the scene on logout) and must pass a
+    // gate's ticket check again to re-enter.
     histRef.current = [];
-    signalNav(screenRef.current, 'gate', 'back');
-    setScreen('gate');
+    signalNav(screenRef.current, 'world', 'back');
+    setScreen('world');
     setParams({});
     setNpc(null);
     setProd(null);

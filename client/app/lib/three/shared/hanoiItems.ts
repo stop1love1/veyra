@@ -88,6 +88,16 @@ export function createHanoiItems(THREEarg) {
   // Emissive lamp head (warm bulb) + traffic-light lenses.
   const bulb = M(new T.MeshStandardMaterial({ color: 0xfff3d2, emissive: 0xffe2a0, emissiveIntensity: 1.4, roughness: 0.4 }));
   const headlight = M(new T.MeshStandardMaterial({ color: 0xfffbe8, emissive: 0xfff0b0, emissiveIntensity: 0.9, roughness: 0.4 }));
+  // Warm paper-lantern body + shared hanging-sign board (both ramp at dusk).
+  const lanternMat = M(new T.MeshStandardMaterial({ color: 0xff7a3c, emissive: 0xff5a1e, emissiveIntensity: 0.6, roughness: 0.5 }));
+  const signEmissive = M(new T.MeshStandardMaterial({ color: 0xffffff, roughness: 0.55, metalness: 0.05, emissive: 0xffffff, emissiveIntensity: 0.18 }));
+
+  // Night ramp: [material, baseIntensity]. setNightFactor(0)=day, (1)=full night.
+  const _emissiveBases = [[bulb, 1.4], [headlight, 0.9], [signEmissive, 0.18], [lanternMat, 0.6]];
+  function setNightFactor(n) {
+    const k = Math.max(0, Math.min(1, n));
+    for (const [m, base] of _emissiveBases) m.emissiveIntensity = base * (0.15 + 1.6 * k);
+  }
 
   /* ------------------------------ helpers ------------------------------- */
   // Reusable scratch objects (avoid per-instance allocation).
@@ -581,7 +591,7 @@ export function createHanoiItems(THREEarg) {
 
     const armGeo = cyl(0.025, 0.025, 0.5, 5);
     const boardGeo = box(0.06, 1.3, 0.42);   // tall vertical signboard
-    const sign = M(new T.MeshStandardMaterial({ color: 0xffffff, roughness: 0.55, metalness: 0.05, emissive: 0xffffff, emissiveIntensity: 0.18 }));
+    const sign = signEmissive;               // shared (ramps with night factor)
 
     const arm = imesh(armGeo, metalDark, n);
     const board = imesh(boardGeo, sign, n, { color: true });
@@ -686,6 +696,82 @@ export function createHanoiItems(THREEarg) {
     return finalize(g, [pole, head, red, amber, green]);
   }
 
+  /* ====================================================================
+   * lanterns(places) — a string of warm paper lanterns (emissive) for the
+   * lakeside. Instanced spheres; glow ramps via setNightFactor.
+   *   places: [{ x, z, y? }]
+   * ================================================================== */
+  function lanterns(places) {
+    const g = new T.Group();
+    const n = places ? places.length : 0;
+    const bodyGeo = sphere(0.18, 8, 6);
+    const body = imesh(bodyGeo, lanternMat, n, { cast: false });
+    for (let i = 0; i < n; i++) {
+      const pl = places[i];
+      setPart(body, i, pl.x, pl.z, 0, { y: pl.y != null ? pl.y : 4.2, sy: 1.25 });
+    }
+    return finalize(g, [body]);
+  }
+
+  /* ====================================================================
+   * bicycles(places) — parked pushbikes leaning along the curb. Instanced,
+   * slimmer than a motorbike: two thin wheels, frame bar, seat, handlebars.
+   *   places: [{ x, z, ry }]
+   * ================================================================== */
+  function bicycles(places) {
+    const g = new T.Group();
+    const n = places ? places.length : 0;
+    const wheelGeo = cyl(0.32, 0.32, 0.04, 14);
+    const frameGeo = box(0.9, 0.05, 0.05);
+    const seatGeo = box(0.18, 0.06, 0.1);
+    const barGeo = cyl(0.02, 0.02, 0.44, 6);
+    const wheels = imesh(wheelGeo, rubber, n * 2, { color: false });
+    const frame = imesh(frameGeo, metalDark, n, { color: true });
+    const seat = imesh(seatGeo, rubber, n, { color: false });
+    const bars = imesh(barGeo, chrome, n, { color: false });
+    for (let i = 0; i < n; i++) {
+      const pl = places[i]; const x = pl.x, z = pl.z, ry = pl.ry || 0;
+      const lean = (rnd(i, 21) - 0.5) * 0.18;
+      setPart(wheels, i * 2 + 0, x, z, ry, { x: -0.5, y: 0.32, z: 0, rx: Math.PI / 2, rz: lean });
+      setPart(wheels, i * 2 + 1, x, z, ry, { x: 0.5, y: 0.32, z: 0, rx: Math.PI / 2, rz: lean });
+      setPart(frame, i, x, z, ry, { x: 0, y: 0.5, z: 0, rz: lean });
+      _c.setHSL(rnd(i, 22), 0.45, 0.45); frame.setColorAt(i, _c);
+      setPart(seat, i, x, z, ry, { x: -0.32, y: 0.74, z: 0 });
+      setPart(bars, i, x, z, ry, { x: 0.5, y: 0.84, z: 0, rx: Math.PI / 2 });
+    }
+    return finalize(g, [wheels, frame, seat, bars]);
+  }
+
+  /* ====================================================================
+   * vendors(places) — shoulder-pole street vendor (gánh hàng rong): a
+   * standing figure with a nón lá, a shoulder pole, and two hanging baskets.
+   *   places: [{ x, z, ry }]
+   * ================================================================== */
+  function vendors(places) {
+    const g = new T.Group();
+    const n = places ? places.length : 0;
+    const bodyGeo = cyl(0.16, 0.2, 0.95, 8);
+    const headGeo = sphere(0.13, 8, 6);
+    const hatGeo = cone(0.32, 0.22, 12);      // nón lá
+    const poleGeo = cyl(0.02, 0.02, 1.5, 5);
+    const basketGeo = cyl(0.26, 0.18, 0.22, 10);
+    const body = imesh(bodyGeo, clothTint, n, { color: true });
+    const head = imesh(headGeo, skin, n, { color: false });
+    const hat = imesh(hatGeo, woodLight, n, { color: false });
+    const pole = imesh(poleGeo, wood, n, { color: false });
+    const baskets = imesh(basketGeo, woodLight, n * 2, { color: false });
+    for (let i = 0; i < n; i++) {
+      const pl = places[i]; const x = pl.x, z = pl.z, ry = pl.ry || 0;
+      setPart(body, i, x, z, ry, { y: 0.78 }); _c.setHSL(0.08, 0.2, 0.55); body.setColorAt(i, _c);
+      setPart(head, i, x, z, ry, { y: 1.4 });
+      setPart(hat, i, x, z, ry, { y: 1.52 });
+      setPart(pole, i, x, z, ry, { y: 1.32, rz: Math.PI / 2 });   // pole across the shoulders (along X)
+      setPart(baskets, i * 2 + 0, x, z, ry, { x: -0.7, y: 0.7 });
+      setPart(baskets, i * 2 + 1, x, z, ry, { x: 0.7, y: 0.7 });
+    }
+    return finalize(g, [body, head, hat, pole, baskets]);
+  }
+
   /* ------------------------------ dispose ------------------------------- */
   /** Free EVERY geometry & material this module allocated. */
   function dispose() {
@@ -706,6 +792,10 @@ export function createHanoiItems(THREEarg) {
     hangingSigns,
     awnings,
     trafficLights,
+    lanterns,
+    bicycles,
+    vendors,
+    setNightFactor,
     dispose,
   };
 }
