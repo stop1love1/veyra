@@ -2,45 +2,22 @@ import React from 'react';
 import { VEYRA } from '../../data';
 import { Ic, Avatar, Glass, Btn, Loader } from '../../components/ui';
 import { HudTop, HudDock } from '../../components/hud';
-import { createVeyraWorld } from '../../lib/three/worldKit';
-import { createVeyraWorldFromMap } from '../../lib/three/mapLoader';
-import { api } from '../../lib/api/client';
-import type { ApiMap, ApiMapInstance, ApiItemDef } from '../../lib/api/client';
+import { createVeyraWorld } from '../../lib/three/worldHanoi';
 import type { Game } from '../../lib/game/types';
 import type { CSSVars } from '../../lib/css';
-
-/** The map slug the client requests for the main world. */
-const WORLD_MAP_SLUG = 'veyra-central';
-
-/**
- * Fetch the published map + its placed instances from the API and shape them
- * for `createVeyraWorldFromMap`. Returns null if the server is offline or the
- * payload is unusable, so the caller can fall back to the bundled world.
- */
-async function loadRemoteMap(
-  signal: AbortSignal,
-): Promise<{ map: ApiMap; instances: ApiMapInstance[]; items: Record<string, ApiItemDef> } | null> {
-  try {
-    const { map } = await api.getMap(WORLD_MAP_SLUG, { signal });
-    if (!map) return null;
-    // instances live in their own collection (keyed by map id); tolerate either
-    // an _id or id on the map doc.
-    const mapId = map._id || map.id || map.slug;
-    const instances = await api.getMapInstances(mapId, { signal });
-    // The item dictionary may be inlined on the map payload (DESIGN §5.4); if it
-    // isn't, we still proceed (instances whose GLB is unknown are skipped).
-    const items = map.items || {};
-    if (!instances.length && !Object.keys(items).length) return null;
-    return { map, instances, items };
-  } catch {
-    return null;
-  }
-}
 
 interface Proximity {
   id: string;
   type?: string;
   name?: string;
+}
+
+interface Weather {
+  tempC: number;
+  label: string;
+  labelEn?: string;
+  icon: string;
+  wind: number;
 }
 
 interface EnterPrompt {
@@ -59,39 +36,27 @@ function World3D({ g }: { g: Game }) {
   const worldApi = React.useRef<{ dispose: () => void; setLang?: (names: Record<string, string>) => void } | null>(null);
   const [near, setNear] = React.useState<Proximity | null>(null);
   const [ready, setReady] = React.useState(false);
+  const [weather, setWeather] = React.useState<Weather | null>(null);
 
   React.useEffect(() => {
     let cancelled = false;
-    const ac = new AbortController();
-    // Shared options for either builder — same player/controls/coins/proximity
-    // contract regardless of which world we end up with.
+    if (!ref.current || worldApi.current) return;
+    // THE world: the realistic Hanoi (Hoan Kiem Lake + Old Quarter) PBR scene,
+    // built synchronously from the shared engine modules. Same player / controls
+    // / coins / proximity contract as before.
     const shops = VEYRA.SHOPS.map((s) => ({ id: s.id, hue: s.hue, name: VEYRA.tx(s.name, g.lang) }));
-    const common = {
+    worldApi.current = createVeyraWorld(ref.current, {
       playerHue: g.player.hue, lite: false,
       shops,
       onProximity: (s: Proximity | null) => setNear(s),
       onCoin: (n: number) => g.addCoins(n),
+      // Real Hanoi weather (Open-Meteo) → small HUD chip.
+      onWeather: (w: Weather) => { if (!cancelled) setWeather(w); },
       // Keep the branded loader up until the world has finished building.
       onReady: () => { if (!cancelled) setReady(true); },
-    };
-
-    async function start() {
-      if (cancelled || !ref.current || worldApi.current) return;
-      // 1) TRY the data-driven world from the published map.
-      const remote = await loadRemoteMap(ac.signal);
-      if (cancelled || !ref.current || worldApi.current) return;
-      if (remote) {
-        worldApi.current = createVeyraWorldFromMap(ref.current, {
-          ...common, map: remote.map, instances: remote.instances, items: remote.items,
-        });
-        return;
-      }
-      // 2) FALL BACK to the bundled, hard-coded Kenney world (server offline).
-      worldApi.current = createVeyraWorld(ref.current, common);
-    }
-    start();
+    });
     return () => {
-      cancelled = true; ac.abort();
+      cancelled = true;
       if (worldApi.current) { worldApi.current.dispose(); worldApi.current = null; }
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -118,6 +83,13 @@ function World3D({ g }: { g: Game }) {
       <div className="v-3d-canvas" ref={ref} />
       {!ready && <div className="v-3d-loading"><Loader label={g.t('loadingWorld')} /></div>}
       <HudTop g={g} />
+      {weather && (
+        <div className="v-weather-chip" aria-label={`${weather.tempC}° ${g.lang === 'vi' ? weather.label : (weather.labelEn || weather.label)}`}>
+          <Ic name={weather.icon} size={15} />
+          <b>{weather.tempC}°</b>
+          <span>{g.lang === 'vi' ? weather.label : (weather.labelEn || weather.label)}</span>
+        </div>
+      )}
       {prompt && (
         <div className="v-enter-prompt" key={near?.id}>
           <Glass dark className="v-enter-card">

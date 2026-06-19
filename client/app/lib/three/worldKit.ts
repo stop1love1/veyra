@@ -82,6 +82,7 @@ export function createVeyraWorld(container, opts) {
   const coins = [];
   let disposed = false;
   let started = false;        // build complete
+  let spawnX = 0, spawnZ = 0, spawnRy = Math.PI;   // player spawn, set during build()
 
   // ── Player avatar (built up front so dispose is uniform) ──
   const player = buildAvatar({ hue: playerHue, style: opts.playerStyle });
@@ -148,153 +149,200 @@ export function createVeyraWorld(container, opts) {
     return 'build:building-' + BUILD[Math.floor(slotHash * BUILD.length) % BUILD.length];
   }
 
-  // ── Build the district (async, after preload) ────────────
+  // ── Build the district: "Veyra Old Quarter" ──────────────
+  //  A big OPEN central plaza, four short avenues dividing the map into four
+  //  clear QUARTERS, each packed with tall narrow tube-houses threaded by
+  //  winding NARROW ALLEYS (ngõ ngách, like Hanoi's Old Quarter). Fewer total
+  //  buildings than the old cross+ring sprawl; a thin far skyline for depth.
   function build() {
     if (disposed) return;
     const density = q.propDensity;
     const city = new THREE.Group();
     scene.add(city);
 
-    // grass ground plane (large enough to cover the whole skyline to the horizon)
+    // grass ground plane (covers the far skyline + fog horizon)
     const ground = new THREE.Mesh(
-      new THREE.PlaneGeometry(2600, 2600),
+      new THREE.PlaneGeometry(2200, 2200),
       new THREE.MeshStandardMaterial({ color: 0x7fae5f, roughness: 1, metalness: 0 }),
     );
     ground.rotation.x = -Math.PI / 2; ground.position.y = -0.02; ground.receiveShadow = true;
     scene.add(ground);
 
-    // central roundabout at origin; blocks the centre
-    const ra = put(city, 'road:roundabout', 0, 0, 0);
-    circles.push({ x: 0, z: 0, r: Math.max(ROUNDABOUT_R, ra ? footprintR(ra) * 0.85 : 0) });
+    // ── Hồ Hoàn Kiếm (Hoan Kiem Lake) — the heart of Hanoi's Old Quarter ──
+    const PLAZA_R = TILE * 6.2;       // lake + lakeside promenade zone radius
+    const LAKE_R = TILE * 4.4;        // the water
+    // lakeside promenade ring (stone path around the water — walkable)
+    const promenade = new THREE.Mesh(
+      new THREE.RingGeometry(LAKE_R - 1.0, PLAZA_R, 64),
+      new THREE.MeshStandardMaterial({ color: 0xc2bba9, roughness: 0.95 }),
+    );
+    promenade.rotation.x = -Math.PI / 2; promenade.position.y = 0.03; promenade.receiveShadow = true; city.add(promenade);
+    // the lake water (Hoan Kiem's famous jade-green)
+    const water = new THREE.Mesh(
+      new THREE.CircleGeometry(LAKE_R, 72),
+      new THREE.MeshStandardMaterial({ color: 0x3f8a63, roughness: 0.16, metalness: 0.35, transparent: true, opacity: 0.92 }),
+    );
+    water.rotation.x = -Math.PI / 2; water.position.y = 0.07; city.add(water);
+    circles.push({ x: 0, z: 0, r: LAKE_R });   // can't walk on the lake; walk the promenade around it
 
-    // collect storefront slots: { x, z, faceRy, nearPlaza }
-    const slots = [];
-    // four avenues N/S (along Z) and E/W (along X)
+    // a few lakeside trees + lamps on the promenade
+    for (let i = 0; i < 10; i++) {
+      const a = (i / 10) * Math.PI * 2 + 0.3;
+      const rr = (LAKE_R + PLAZA_R) / 2;
+      put(city, 'road:light-square', Math.cos(a) * rr, Math.sin(a) * rr, -a);
+    }
+
+    // Tháp Rùa (Turtle Tower) on a small island at the lake centre
+    (function turtleTower() {
+      const g = new THREE.Group();
+      const stone = new THREE.MeshStandardMaterial({ color: 0x9a9384, roughness: 0.95 });
+      const stoneD = new THREE.MeshStandardMaterial({ color: 0x7f786a, roughness: 0.95 });
+      const island = new THREE.Mesh(new THREE.CylinderGeometry(TILE * 1.0, TILE * 1.15, 0.7, 22),
+        new THREE.MeshStandardMaterial({ color: 0x6f8a55, roughness: 1 }));
+      island.position.y = 0.35; island.receiveShadow = true; g.add(island);
+      // tiered tower (base wider, narrowing up)
+      const tiers = [[2.0, 2.4, 0.0], [1.7, 2.1, 2.5], [1.35, 1.8, 4.7], [1.0, 1.5, 6.6]];
+      tiers.forEach(([rad, h, y], idx) => {
+        const t = new THREE.Mesh(new THREE.BoxGeometry(rad * 2, h, rad * 2), idx % 2 ? stoneD : stone);
+        t.position.y = 0.7 + y + h / 2; t.castShadow = true; t.receiveShadow = true; g.add(t);
+      });
+      const cap = new THREE.Mesh(new THREE.ConeGeometry(1.25, 1.4, 4), stoneD);
+      cap.rotation.y = Math.PI / 4; cap.position.y = 0.7 + 8.3; cap.castShadow = true; g.add(cap);
+      g.scale.setScalar(1.5); city.add(g);
+    })();
+
+    // Cầu Thê Húc (red Huc bridge) + Đền Ngọc Sơn (Ngoc Son temple) toward the +Z shore
+    (function theHucAndTemple() {
+      const red = new THREE.MeshStandardMaterial({ color: 0xd23a26, roughness: 0.7 });
+      const iz = LAKE_R * 0.6;   // temple island, just inside the water on the +Z side
+      const island = new THREE.Mesh(new THREE.CylinderGeometry(TILE * 0.8, TILE * 0.95, 0.7, 18),
+        new THREE.MeshStandardMaterial({ color: 0x6f8a55, roughness: 1 }));
+      island.position.set(0, 0.35, iz); island.receiveShadow = true; city.add(island);
+      // small temple: pale walls + tiered red roofs (đền Ngọc Sơn)
+      const tg = new THREE.Group(); tg.position.set(0, 0.7, iz);
+      const wall = new THREE.Mesh(new THREE.BoxGeometry(4.6, 2.8, 3.6), new THREE.MeshStandardMaterial({ color: 0xeadcb8, roughness: 0.9 }));
+      wall.position.y = 1.4; wall.castShadow = true; tg.add(wall);
+      const r1 = new THREE.Mesh(new THREE.ConeGeometry(3.9, 1.6, 4), red); r1.rotation.y = Math.PI / 4; r1.position.y = 3.2; r1.castShadow = true; tg.add(r1);
+      const r2 = new THREE.Mesh(new THREE.ConeGeometry(2.8, 1.3, 4), red); r2.rotation.y = Math.PI / 4; r2.position.y = 4.3; tg.add(r2);
+      const door = new THREE.Mesh(new THREE.BoxGeometry(1.3, 1.9, 0.2), new THREE.MeshStandardMaterial({ color: 0x7a2d20 })); door.position.set(0, 0.95, 1.82); tg.add(door);
+      tg.scale.setScalar(1.4); city.add(tg);
+      // the red arched bridge from the +Z shore to the island
+      const startZ = iz + TILE * 0.85, endZ = PLAZA_R - 0.5, span = endZ - startZ;
+      const planks = 10;
+      for (let i = 0; i < planks; i++) {
+        const tnorm = i / (planks - 1);
+        const z = startZ + tnorm * span;
+        const arch = Math.sin(tnorm * Math.PI) * 1.8;
+        const seg = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.45, span / planks + 0.5), red);
+        seg.position.set(0, 0.8 + arch, z); seg.castShadow = true; city.add(seg);
+        [-1, 1].forEach((s) => { const rl = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.9, span / planks + 0.5), red); rl.position.set(s * 1.1, 1.35 + arch, z); city.add(rl); });
+      }
+    })();
+
+    // ── Four short avenues dividing the four quarters ──
+    const AVE_START = Math.ceil(PLAZA_R / TILE);    // first road tile out from the plaza
+    const AVE = 3;                                   // avenue length (tiles)
     const arms = [
       { dx: 0, dz: 1, roadRy: 0 },
       { dx: 0, dz: -1, roadRy: Math.PI },
       { dx: 1, dz: 0, roadRy: -Math.PI / 2 },
       { dx: -1, dz: 0, roadRy: Math.PI / 2 },
     ];
+    const shopSlots = [];   // prime frontage along the avenues
     for (const { dx, dz, roadRy } of arms) {
-      const px = -dz, pz = dx; // perpendicular (sidewalk / building offset axis)
-      for (let i = START_T; i < START_T + ARM; i++) {
+      const px = -dz, pz = dx;
+      for (let i = AVE_START; i < AVE_START + AVE; i++) {
         const x = dx * i * TILE, z = dz * i * TILE;
         put(city, 'road:straight', x, z, roadRy);
-        // sidewalks + building slots both sides
         [1, -1].forEach((sgn) => {
           put(city, 'road:side', x + px * sgn * TILE, z + pz * sgn * TILE, roadRy + (sgn > 0 ? 0 : Math.PI));
           const bx = x + px * sgn * 2 * TILE, bz = z + pz * sgn * 2 * TILE;
-          // building faces the avenue centreline (toward -perp*sgn)
-          const faceRy = Math.atan2(-px * sgn, -pz * sgn);
-          slots.push({ x: bx, z: bz, faceRy, nearPlaza: i <= START_T + 1, used: false });
+          shopSlots.push({ x: bx, z: bz, faceRy: Math.atan2(-px * sgn, -pz * sgn), nearPlaza: i <= AVE_START, used: false });
         });
-        // street lights at intervals, on the sidewalk edge
         if (i % 2 === 0) {
-          put(city, 'road:light-square', x + px * 0.75 * TILE, z + pz * 0.75 * TILE, roadRy);
-          put(city, 'road:light-square', x - px * 0.75 * TILE, z - pz * 0.75 * TILE, roadRy + Math.PI);
+          put(city, 'road:light-square', x + px * 0.8 * TILE, z + pz * 0.8 * TILE, roadRy);
+          put(city, 'road:light-square', x - px * 0.8 * TILE, z - pz * 0.8 * TILE, roadRy + Math.PI);
         }
       }
     }
 
-    // ── Outer ring road: a square loop linking the four avenue ends, so the
-    //    player can wander several city blocks (not just the four spokes). ──
-    const ringHalf = START_T + ARM;           // half-extent of the ring, one tile past avenue ends
-    // side runs: along +X/-X edges (vary z) and +Z/-Z edges (vary x). Each edge
-    // is a row of straight tiles; corners get a bend; the avenue mid-points get a
-    // crossroad (T/4-way) so the spoke connects cleanly into the ring.
-    const RC = ringHalf * TILE;               // ring coordinate (world units) on each axis
-    // edges: { fixed axis value, varying axis, roadRy for straight tiles, perp for buildings }
-    function ringStraightRy(edge) {
-      // edges 'N'/'S' run along X -> rotate 90°; 'E'/'W' run along Z -> 0
-      return (edge === 'N' || edge === 'S') ? -Math.PI / 2 : 0;
+    // ── Tube-house placer: tall, narrow footprint, varied — the Hanoi look ──
+    function placeHouse(x, z, ry, h, far) {
+      const name = h > 0.9
+        ? 'build:building-skyscraper-' + SKY[Math.floor(h * SKY.length) % SKY.length]
+        : 'build:building-' + BUILD[Math.floor(h * BUILD.length) % BUILD.length];
+      if (!kit.has(name)) return;
+      const c = kit.get(name);
+      c.position.set(x, 0, z); c.rotation.y = ry;
+      const sxz = CITY_SCALE * (0.6 + h * 0.18);     // narrow footprint (tube house)
+      const sy = CITY_SCALE * (1.0 + h * 1.6);        // tall + varied skyline within the block
+      c.scale.set(sxz, sy, sxz);
+      c.traverse((o) => { if (o.isMesh) { o.castShadow = !far; o.receiveShadow = true; } });
+      city.add(c);
+      circles.push({ x, z, r: footprintR(c) + 0.6 });
+      // an occasional awning/parasol at street level for shop character
+      if (h > 0.6) {
+        const det = DETAILS[Math.floor(hash01(z, x) * DETAILS.length) % DETAILS.length];
+        const fx = Math.sin(ry), fz = Math.cos(ry);
+        put(city, 'build:' + det, x + fx * sxz * 0.9, z + fz * sxz * 0.9, ry);
+      }
     }
-    const ringEdges = [
-      { edge: 'N', fz: RC, dir: 'x' },   // top edge (z = +RC)
-      { edge: 'S', fz: -RC, dir: 'x' },  // bottom edge (z = -RC)
-      { edge: 'E', fx: RC, dir: 'z' },   // right edge (x = +RC)
-      { edge: 'W', fx: -RC, dir: 'z' },  // left edge (x = -RC)
-    ];
-    for (const e of ringEdges) {
-      const roadRy = ringStraightRy(e.edge);
-      for (let k = -ringHalf; k <= ringHalf; k++) {
-        const x = e.dir === 'x' ? k * TILE : e.fx;
-        const z = e.dir === 'z' ? k * TILE : e.fz;
-        const isCorner = Math.abs(k) === ringHalf;
-        const isAvenueMouth = k === 0;        // where a spoke avenue meets the ring
-        if (isCorner) {
-          // corner handled once per corner below (skip here to avoid double-place)
-          continue;
-        }
-        if (isAvenueMouth) {
-          put(city, 'road:crossroad', x, z, 0);
-        } else {
-          put(city, 'road:straight', x, z, roadRy);
-        }
-        // sidewalk + a building slot on the OUTER side of the ring, facing in
-        const ox = e.dir === 'z' ? Math.sign(e.fx) : 0;
-        const oz = e.dir === 'x' ? Math.sign(e.fz) : 0;
-        put(city, 'road:side', x + ox * TILE, z + oz * TILE, roadRy);
-        const bx = x + ox * 2 * TILE, bz = z + oz * 2 * TILE;
-        const faceRy = Math.atan2(-ox, -oz);   // face inward toward the ring road
-        slots.push({ x: bx, z: bz, faceRy, nearPlaza: false, used: false });
-        // also a building slot on the INNER side (between ring and avenues) for density
-        if (Math.abs(k) % 2 === 0) {
-          const ix2 = -ox, iz2 = -oz;
-          const ibx = x + ix2 * 2 * TILE, ibz = z + iz2 * 2 * TILE;
-          slots.push({ x: ibx, z: ibz, faceRy: Math.atan2(-ix2, -iz2), nearPlaza: false, used: false });
+
+    // ── Four QUARTERS (diagonal blocks) of packed houses + winding alleys ──
+    const CELL = TILE * 0.92;          // tight packing → near-solid walls between houses
+    const GRID = 6;                    // cells per quarter side
+    const Q_IN = (AVE_START + 1) * TILE;   // inner corner of each quarter (just outside plaza/avenues)
+    const quarters = [{ sx: 1, sz: 1 }, { sx: -1, sz: 1 }, { sx: -1, sz: -1 }, { sx: 1, sz: -1 }];
+    const alleyCoins = [];
+    let houseCount = 0;
+    const houseCap = Math.round((q.tier === 'high' ? 999 : q.tier === 'mid' ? 90 : 48) * (0.6 + density * 0.4));
+    for (const { sx, sz } of quarters) {
+      // a winding vertical alley whose column shifts per row, plus one cross alley
+      for (let r = 0; r < GRID; r++) {
+        const vAlley = 1 + Math.round(hash01(r * 9.1, sx * 3.7 + sz * 5.3) * 2);  // 1..3, shifts per row
+        for (let c = 0; c < GRID; c++) {
+          if (houseCount >= houseCap) break;
+          const x = sx * (Q_IN + c * CELL);
+          const z = sz * (Q_IN + r * CELL);
+          const isVAlley = c === vAlley;
+          const isHAlley = r === (sx > 0 ? 3 : 2);          // one cross alley (offset per quarter)
+          const courtyard = hash01(x * 0.5, z * 0.5) < 0.10; // a few empty courtyards
+          if (isVAlley || isHAlley || courtyard) {
+            // alley/courtyard cell — drop a coin in some of them
+            if (hash01(x + 5, z + 9) > 0.78) alleyCoins.push({ x, z });
+            continue;
+          }
+          if (hash01(x + 3, z + 9) > (0.62 + density * 0.38)) continue;   // density cull
+          const h = hash01(x * 1.7 + 5, z * 1.3 + 2);
+          const ry = Math.floor(hash01(z, x) * 4) * (Math.PI / 2);
+          const far = Math.hypot(x, z) > (Q_IN + GRID * CELL);
+          placeHouse(x, z, ry, h, far);
+          houseCount++;
         }
       }
     }
-    // four ring corners: a bend tile + a skyscraper anchor just outside it
-    const corners = [
-      { x: RC, z: RC, ry: 0 }, { x: -RC, z: RC, ry: Math.PI / 2 },
-      { x: -RC, z: -RC, ry: Math.PI }, { x: RC, z: -RC, ry: -Math.PI / 2 },
-    ];
-    for (const c of corners) {
-      put(city, 'road:bend', c.x, c.z, c.ry);
-      // tall anchor building just beyond the corner, facing the city centre
-      const bx = c.x + Math.sign(c.x) * 1.6 * TILE, bz = c.z + Math.sign(c.z) * 1.6 * TILE;
-      slots.push({ x: bx, z: bz, faceRy: Math.atan2(-Math.sign(c.x), -Math.sign(c.z)), nearPlaza: false, used: false, anchor: true });
-    }
 
-    // extend the player play radius to include the new ring blocks
-    OUTER_R = (ringHalf + 2.5) * TILE;
+    // walkable radius = plaza + avenues + quarter blocks (+ margin)
+    OUTER_R = Q_IN + GRID * CELL + TILE * 1.5;
 
-    // sort slots so the closest-to-plaza go first (prime frontage for real shops)
-    slots.sort((a, b) => (a.x ** 2 + a.z ** 2) - (b.x ** 2 + b.z ** 2));
-
-    // place a generic building into a slot, register a collision circle
+    // ── place a generic shop building on an avenue slot ──
     function placeBuilding(slot, opt) {
       opt = opt || {};
       const hb = hash01(slot.x, slot.z);
-      const name = opt.name
-        || (slot.anchor ? 'build:building-skyscraper-' + SKY[Math.floor(hb * SKY.length) % SKY.length]
-          : pickBuilding(hb, slot.nearPlaza));
+      const name = opt.name || pickBuilding(hb, slot.nearPlaza);
       const b = put(city, name, slot.x, slot.z, slot.faceRy);
-      // Distant generic fill contributes little visible shadow detail but
-      // inflates the single-light shadow pass; drop its castShadow so only
-      // near/important buildings cast (the skyline fill is already shadowless).
-      if (b && opt.noShadow) b.traverse((o) => { if (o.isMesh) o.castShadow = false; });
       const r = (b ? footprintR(b) : TILE * 0.5) + 1.0;
       circles.push({ x: slot.x, z: slot.z, r });
-      slot.used = true;
-      slot.buildR = r;
-      // shop character: an awning/parasol on some ground floors
+      slot.used = true; slot.buildR = r;
       if (hb > 0.45 || opt.detail) {
         const det = DETAILS[Math.floor(hash01(slot.z, slot.x) * DETAILS.length) % DETAILS.length];
-        // place the detail just in front of the façade, facing same way
         const fx = Math.sin(slot.faceRy), fz = Math.cos(slot.faceRy);
         put(city, 'build:' + det, slot.x + fx * (r * 0.55), slot.z + fz * (r * 0.55), slot.faceRy);
       }
       return b;
     }
 
-    // ── Real shops at prime frontage ─────────────────────────
-    const GEN_HUES = [28, 200, 150, 210, 46, 12, 190, 36, 96, 220, 18, 168];
-
     function addShopMarker(slot, info) {
-      // entrance point: in front of the façade toward the avenue centre
       const fx = Math.sin(slot.faceRy), fz = Math.cos(slot.faceRy);
       const er = (slot.buildR || TILE) + 3.0;
       const ent = new THREE.Vector3(slot.x + fx * er, 0, slot.z + fz * er);
@@ -308,29 +356,17 @@ export function createVeyraWorld(container, opts) {
       interactables.push({ id: info.id, type: 'shop', name: info.name, hue: info.hue, pos: ent, trig: TILE * 0.9, marker, markerBaseY: my });
     }
 
-    const realCount = Math.min(shopsIn.length, slots.length);
-    for (let i = 0; i < realCount; i++) {
-      placeBuilding(slots[i], {});
-      addShopMarker(slots[i], shopsIn[i]);
+    // ── Real shops at prime avenue frontage; fill a FEW more generically ──
+    shopSlots.sort((a, b) => (a.x ** 2 + a.z ** 2) - (b.x ** 2 + b.z ** 2));
+    const realCount = Math.min(shopsIn.length, shopSlots.length);
+    for (let i = 0; i < realCount; i++) { placeBuilding(shopSlots[i], {}); addShopMarker(shopSlots[i], shopsIn[i]); }
+    for (let i = realCount; i < shopSlots.length; i++) {
+      if (hash01(shopSlots[i].x + 1, shopSlots[i].z + 2) > 0.5) placeBuilding(shopSlots[i], {});
     }
 
-    // ── Remaining slots filled generically (capped by density) ──
-    const remaining = slots.filter((s) => !s.used);
-    const fillCap = Math.max(realCount, Math.round(remaining.length * Math.min(1, 0.5 + density * 0.6)));
-    // Buildings past this radius drop their shadow casting (little visible
-    // detail, but real cost on the single-light shadow pass). OUTER_R is the
-    // walkable radius set above; a few tiles past it is the near/far cutoff.
-    const SHADOW_R = OUTER_R + TILE * 6;
-    for (let i = 0; i < remaining.length && i < fillCap; i++) {
-      const s = remaining[i];
-      const far = Math.hypot(s.x, s.z) > SHADOW_R;
-      placeBuilding(s, { noShadow: far });
-    }
-
-    // ── POI kiosks: quests + cart beside the plaza ───────────
+    // ── POI kiosks: quests + cart at the plaza edge ──────────
     function poiKiosk(x, z, accentHue, info) {
-      // reuse a small detail (parasol) + emissive marker as a kiosk
-      const ry = Math.atan2(-x, -z); // face the plaza centre
+      const ry = Math.atan2(-x, -z);
       put(city, 'build:detail-parasol-a', x, z, ry);
       const my = TILE * 1.8;
       const marker = new THREE.Mesh(
@@ -341,11 +377,11 @@ export function createVeyraWorld(container, opts) {
       circles.push({ x, z, r: TILE * 0.5 });
       interactables.push({ id: info.id, type: info.type, name: info.name, pos: new THREE.Vector3(x, 0, z), trig: TILE * 0.85, marker, markerBaseY: my });
     }
-    const kioskR = ROUNDABOUT_R + TILE * 0.9;
-    poiKiosk(-kioskR, kioskR, 45, { id: 'quests', type: 'quests', name: 'Quests' });
-    poiKiosk(kioskR, kioskR, playerHue, { id: 'cart', type: 'cart', name: 'Cart' });
+    const promR = (LAKE_R + PLAZA_R) / 2;
+    poiKiosk(-promR, -promR * 0.15, 45, { id: 'quests', type: 'quests', name: 'Quests' });
+    poiKiosk(promR, -promR * 0.15, playerHue, { id: 'cart', type: 'cart', name: 'Cart' });
 
-    // ── Coins scattered along the avenues ────────────────────
+    // ── Coins: along the avenues + tucked in the alleys ──────
     const coinMat = new THREE.MeshStandardMaterial({ color: 0xf3cd84, emissive: 0x8a6a1e, emissiveIntensity: 0.25, metalness: 0.7, roughness: 0.35 });
     function spawnCoin(x, z) {
       const g = new THREE.Group(); g.position.set(x, TILE * 0.5, z);
@@ -353,80 +389,66 @@ export function createVeyraWorld(container, opts) {
       c.rotation.x = Math.PI / 2; c.castShadow = true; g.add(c);
       scene.add(g); coins.push({ g, base: TILE * 0.5, x, z });
     }
-    const coinN = Math.round(22 * density);
+    const coinN = Math.round(14 * density);
     for (let i = 0; i < coinN; i++) {
       const arm = arms[i % arms.length];
-      const i2 = START_T + Math.random() * ARM;
-      // scatter across the road WIDTH (perpendicular to the avenue): for N/S
-      // avenues (arm.dz) jitter x; for E/W avenues (arm.dx) jitter z.
-      const x = arm.dx * i2 * TILE + (Math.random() - 0.5) * TILE * 0.7 * (arm.dz ? 1 : 0);
-      const z = arm.dz * i2 * TILE + (Math.random() - 0.5) * TILE * 0.7 * (arm.dx ? 1 : 0);
+      const i2 = AVE_START + Math.random() * AVE;
+      const x = arm.dx * i2 * TILE + (Math.random() - 0.5) * TILE * 0.6 * (arm.dz ? 1 : 0);
+      const z = arm.dz * i2 * TILE + (Math.random() - 0.5) * TILE * 0.6 * (arm.dx ? 1 : 0);
       spawnCoin(x, z);
     }
+    // a handful of coins down the alleys (reward exploration)
+    for (let i = 0; i < alleyCoins.length && i < Math.round(10 * density); i++) spawnCoin(alleyCoins[i].x, alleyCoins[i].z);
 
-    // play radius = the walkable ring blocks (set above; do NOT let the distant
-    // skyline fill below inflate it — that fill is purely visual).
     const WALK_R = OUTER_R;
 
-    // ── Distant skyline fill: cheap low-detail buildings on a coarse grid from
-    //    the walkable edge out to the horizon, denser near + thinning out, no
-    //    collision, no shadow. Shared-geometry clones keep this cheap. ────────
+    // ── Thin far skyline for depth (much smaller than before) ──
     const skyline = new THREE.Group();
     scene.add(skyline);
-    const FILL_CAP = Math.round((q.tier === 'high' ? 220 : q.tier === 'mid' ? 130 : 60) * (0.6 + density * 0.4));
-    const cell = TILE * 2.2;                 // grid spacing between distant buildings
-    const innerR = WALK_R + TILE * 1.5;      // start just past the walkable area
-    const outerR = WALK_R + cell * 16;       // horizon radius
+    const FILL_CAP = Math.round((q.tier === 'high' ? 70 : q.tier === 'mid' ? 40 : 16) * (0.6 + density * 0.4));
+    const cell = TILE * 2.6;
+    const innerR = WALK_R + TILE * 2.5;
+    const outerR = WALK_R + cell * 12;
     let placed = 0;
     const gridN = Math.ceil(outerR / cell);
-    // walk a square grid; keep cells in the annulus [innerR, outerR]; skip by a
-    // distance-weighted probability so the fill thins toward the horizon.
     outer:
     for (let gx = -gridN; gx <= gridN; gx++) {
       for (let gz = -gridN; gz <= gridN; gz++) {
         if (placed >= FILL_CAP) break outer;
-        // jitter each cell so the grid doesn't read as a lattice
         const hjx = hash01(gx * 3.1, gz * 7.7), hjz = hash01(gz * 5.3, gx * 2.9);
         const x = gx * cell + (hjx - 0.5) * cell * 0.7;
         const z = gz * cell + (hjz - 0.5) * cell * 0.7;
         const r = Math.hypot(x, z);
         if (r < innerR || r > outerR) continue;
-        // thinning: near the edge keep most; near horizon keep few
-        const tNorm = (r - innerR) / (outerR - innerR);     // 0 near .. 1 far
-        const keep = 1 - tNorm * 0.7;
-        if (hash01(x * 0.7, z * 1.3) > keep) continue;
+        const tNorm = (r - innerR) / (outerR - innerR);
+        if (hash01(x * 0.7, z * 1.3) > (1 - tNorm * 0.6)) continue;
         const h = hash01(x + 17, z + 5);
-        // mostly low-detail boxes, a few skyscrapers as far-tower silhouettes
-        const name = h > 0.9
+        const name = h > 0.85
           ? 'build:building-skyscraper-' + SKY[Math.floor(h * SKY.length) % SKY.length]
           : 'build:low-detail-building-' + LOW[Math.floor(h * LOW.length) % LOW.length];
         if (!kit.has(name)) continue;
         const c = kit.get(name);
         c.position.set(x, 0, z);
-        c.rotation.y = Math.floor(hash01(z, x) * 4) * (Math.PI / 2);   // axis-aligned variety
-        // vary height a little + scale up the farther towers so they read on the horizon
-        const vScale = CITY_SCALE * (0.9 + h * 1.4 + tNorm * 0.6);
-        c.scale.set(CITY_SCALE * (0.9 + hjx * 0.3), vScale, CITY_SCALE * (0.9 + hjz * 0.3));
+        c.rotation.y = Math.floor(hash01(z, x) * 4) * (Math.PI / 2);
+        const vScale = CITY_SCALE * (0.9 + h * 1.6 + tNorm * 0.6);
+        c.scale.set(CITY_SCALE * (0.8 + hjx * 0.3), vScale, CITY_SCALE * (0.8 + hjz * 0.3));
         c.traverse((o) => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = false; } });
         skyline.add(c);
         placed++;
       }
     }
-    // The distant skyline is static (never moves/animates): bake its world
-    // matrices once and stop per-frame matrix recomputation for these hundreds
-    // of clones to cut idle CPU cost on low/mid tiers.
     skyline.updateMatrixWorld(true);
     skyline.traverse((o) => { o.matrixAutoUpdate = false; });
 
-    // point the sun shadow target at the district centre
     sun.target.position.set(0, 0, 0);
 
-    // ── Place the player at the avenue mouth by the first buildings ──
-    player.group.position.set(0, 0, START_Z);
-    player.group.rotation.y = Math.PI; // face the plaza / roundabout (−Z)
-    blob.position.set(0, 0.05, START_Z);
+    // ── Spawn on the +Z lakeside, beside the red bridge, facing Turtle Tower ──
+    spawnX = TILE * 1.5; spawnZ = PLAZA_R - TILE * 0.7;
+    spawnRy = Math.atan2(-spawnX, -spawnZ);   // look toward the lake centre
+    player.group.position.set(spawnX, 0, spawnZ);
+    player.group.rotation.y = spawnRy;
+    blob.position.set(spawnX, 0.05, spawnZ);
 
-    // frame the camera behind the player looking at the plaza
     camYaw = 0; camElev = 0.5; camDist = TILE * 5;
 
     // the minimap is drawn correctly every frame — reveal it now that the
@@ -656,8 +678,8 @@ export function createVeyraWorld(container, opts) {
       if (mini.parentNode) mini.parentNode.removeChild(mini);
     },
     recenter() {
-      player.group.position.set(0, 0, START_Z);
-      player.group.rotation.y = Math.PI;
+      player.group.position.set(spawnX, 0, spawnZ);
+      player.group.rotation.y = spawnRy;
     },
     // Relabel shop interactables when the UI language changes. `names` is a
     // { [shopId]: localizedName } map; the proximity prompt is re-fired so the

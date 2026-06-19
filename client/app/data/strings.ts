@@ -134,6 +134,15 @@ export const STR: Record<string, Localized> = {
   saveFailed:     { vi: 'Lưu thất bại. Thử lại.', en: 'Save failed. Try again.' },
   seller:         { vi: 'Người bán',               en: 'Seller' },
 
+  // ── Account menu (HUD profile popover) ──
+  account:        { vi: 'Tài khoản',              en: 'Account' },
+  editCharacter:  { vi: 'Sửa nhân vật',           en: 'Edit character' },
+  signInRegister: { vi: 'Đăng nhập / Đăng ký',    en: 'Sign in / Register' },
+  notSignedIn:    { vi: 'Chưa đăng nhập',          en: 'Not signed in' },
+  playingAs:      { vi: 'Đang chơi',               en: 'Playing as' },
+  loggedOut:      { vi: 'Đã đăng xuất',           en: 'Signed out' },
+  roleAdmin:      { vi: 'Quản trị',               en: 'Admin' },
+
   // ── Product form ──
   productName:    { vi: 'Tên sản phẩm',           en: 'Product name' },
   description:    { vi: 'Mô tả',                    en: 'Description' },
