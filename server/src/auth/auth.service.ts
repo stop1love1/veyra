@@ -50,7 +50,7 @@ export class AuthService {
       email,
       passwordHash,
       name: dto.name,
-      role: Role.User,
+      role: dto.role === 'seller' ? Role.Seller : Role.User,
       status: 'active',
       coins: 1280,
     });

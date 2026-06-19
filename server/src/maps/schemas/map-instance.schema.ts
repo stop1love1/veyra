@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { HydratedDocument, Types } from 'mongoose';
+import { Schema as MongooseSchema, HydratedDocument, Types } from 'mongoose';
 
 /**
  * 3D position of a placed instance.
@@ -43,10 +43,10 @@ export type MapInstanceDocument = HydratedDocument<MapInstance>;
  */
 @Schema({ timestamps: true })
 export class MapInstance {
-  @Prop({ type: Types.ObjectId, ref: 'Map', required: true, index: true })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Map', required: true, index: true })
   mapId: Types.ObjectId;
 
-  @Prop({ type: Types.ObjectId, ref: 'Item', required: true, index: true })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Item', required: true, index: true })
   itemId: Types.ObjectId;
 
   @Prop({ type: TransformSchema, default: () => ({}) })

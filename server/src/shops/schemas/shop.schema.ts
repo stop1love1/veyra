@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { HydratedDocument, Types } from 'mongoose';
+import { Schema as MongooseSchema, HydratedDocument, Types } from 'mongoose';
 import { I18n, I18nSchema } from '../../common/i18n';
 
 /**
@@ -23,7 +23,7 @@ export type ShopDocument = HydratedDocument<Shop>;
  */
 @Schema({ timestamps: true })
 export class Shop {
-  @Prop({ type: Types.ObjectId, ref: 'User', required: true, index: true })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true, index: true })
   sellerId: Types.ObjectId;
 
   @Prop({ type: I18nSchema, required: true })
@@ -53,11 +53,11 @@ export class Shop {
   status: string;
 
   // The in-store NPC advisor (optional).
-  @Prop({ type: Types.ObjectId, ref: 'Npc', required: false })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Npc', required: false })
   advisorNpcId?: Types.ObjectId;
 
   // Optional custom shop interior map.
-  @Prop({ type: Types.ObjectId, ref: 'Map', required: false })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Map', required: false })
   interiorMapId?: Types.ObjectId;
 
   @Prop({ type: ShopStatsSchema, default: () => ({}) })

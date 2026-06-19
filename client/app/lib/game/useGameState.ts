@@ -3,8 +3,10 @@ import React from 'react';
 import { VEYRA } from '../../data';
 import { detectLite } from '../theme/detect';
 import i18n from '../i18n';
+import { api, setToken } from '../api/client';
+import type { PublicUser } from '../api/client';
 import type {
-  Game, Player, CartLine, ScreenName, ScreenParams, WorldPanel, NavSignal, NavDir,
+  Game, Player, CartLine, ScreenName, ScreenParams, WorldPanel, NavSignal, NavDir, AuthState,
 } from './types';
 import type { Lang } from '../../data/types';
 
@@ -32,6 +34,40 @@ function deriveLevel(coins: number): { level: number; progress: number } {
   const level = Math.floor(safe / COINS_PER_LEVEL) + 1;
   const progress = (safe % COINS_PER_LEVEL) / COINS_PER_LEVEL;
   return { level, progress };
+}
+
+// Auth lives in its own localStorage keys so the token lifecycle is independent
+// of the main veyra_state blob. veyra_token is owned by client.ts (setToken).
+const USER_KEY = 'veyra_user';
+
+/** Read the cached auth user (offline-safe seller affordances). */
+function readUser(): PublicUser | null {
+  try {
+    const raw = localStorage.getItem(USER_KEY);
+    if (!raw) return null;
+    const u = JSON.parse(raw);
+    return u && typeof u === 'object' ? (u as PublicUser) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Persist (or clear) the cached auth user. */
+function persistUser(u: PublicUser | null): void {
+  try {
+    if (u) localStorage.setItem(USER_KEY, JSON.stringify(u));
+    else localStorage.removeItem(USER_KEY);
+  } catch {
+    /* quota / private mode — ignore */
+  }
+}
+
+function readToken(): string | null {
+  try {
+    return localStorage.getItem('veyra_token');
+  } catch {
+    return null;
+  }
 }
 
 /** Versioned load with a migration guard — old/foreign shapes are dropped. */
@@ -77,6 +113,11 @@ export function useGameState(): GameState {
   const [nav, setNav] = React.useState<NavSignal>({ key: 0, dir: 'forward', from: null, to: saved.screen || 'gate' });
   const [flash, setFlash] = React.useState<string | null>(null);
   const [lite] = React.useState<boolean>(() => detectLite());
+
+  // Auth state — kept separate from the persisted veyra_state blob.
+  const [authUser, setAuthUser] = React.useState<PublicUser | null>(() => readUser());
+  const [authToken, setAuthToken] = React.useState<string | null>(() => readToken());
+  const [authOpen, setAuthOpen] = React.useState<boolean>(false);
 
   // Refs let the action callbacks stay referentially stable (empty deps) while
   // still reading the latest values — this is what stops the render storm.
@@ -223,6 +264,65 @@ export function useGameState(): GameState {
   const openWorldPanel = React.useCallback((p: WorldPanel) => setWorldPanel(p), []);
   const closeWorldPanel = React.useCallback(() => setWorldPanel(null), []);
 
+  // ── Auth (offline-safe; every api.* call is wrapped) ─────────────────────
+  const openAuth = React.useCallback(() => setAuthOpen(true), []);
+  const closeAuth = React.useCallback(() => setAuthOpen(false), []);
+
+  const login = React.useCallback(async (email: string, password: string): Promise<boolean> => {
+    try {
+      const r = await api.login({ email, password });   // persists token
+      const u = r.user ?? null;
+      setAuthUser(u);
+      setAuthToken(readToken());
+      persistUser(u);
+      flashMsg(t('authWelcome'));
+      return true;
+    } catch {
+      flashMsg(t('authFailed'));
+      return false;
+    }
+  }, [flashMsg, t]);
+
+  const register = React.useCallback(
+    async (email: string, password: string, name: string, asSeller?: boolean): Promise<boolean> => {
+      try {
+        const r = await api.register({ email, password, name, role: asSeller ? 'seller' : 'user' });
+        const u = r.user ?? null;
+        setAuthUser(u);
+        setAuthToken(readToken());
+        persistUser(u);
+        flashMsg(t('authWelcome'));
+        return true;
+      } catch {
+        flashMsg(t('authFailed'));
+        return false;
+      }
+    },
+    [flashMsg, t],
+  );
+
+  const logout = React.useCallback(() => {
+    setToken(null);
+    persistUser(null);
+    setAuthUser(null);
+    setAuthToken(null);
+  }, []);
+
+  const refresh = React.useCallback(async () => {
+    if (!readToken()) return;
+    try {
+      const u = await api.me();
+      setAuthUser(u);
+      setAuthToken(readToken());
+      persistUser(u);
+    } catch {
+      /* offline — keep the cached user so seller affordances survive */
+    }
+  }, []);
+
+  // Re-hydrate the auth user once on mount when a token is present.
+  React.useEffect(() => { void refresh(); }, [refresh]);
+
   React.useEffect(() => () => {
     clearTimeout(flashTimer.current);
     clearTimeout(coinTimer.current);
@@ -234,6 +334,18 @@ export function useGameState(): GameState {
     () => cart.reduce((a, x) => a + (VEYRA.productById(x.id)?.price ?? 0) * x.qty, 0),
     [cart],
   );
+
+  const role = authUser?.role ?? null;
+  const isSeller = role === 'seller' || role === 'admin';
+  const isAdmin = role === 'admin';
+  const auth = React.useMemo<AuthState>(() => ({
+    user: authUser,
+    token: authToken,
+    role,
+    isSeller,
+    isAdmin,
+    login, register, logout, refresh,
+  }), [authUser, authToken, role, isSeller, isAdmin, login, register, logout, refresh]);
 
   const g = React.useMemo<Game>(() => ({
     lang, setLang, t,
@@ -247,11 +359,13 @@ export function useGameState(): GameState {
     npcOpen, openNPC, closeNPC,
     productOpen: prodOpen, openProduct, closeProduct,
     worldPanel, openWorldPanel, closeWorldPanel,
+    auth, authOpen, openAuth, closeAuth,
     lite, flash: flashMsg,
   }), [
     lang, player, screen, params, cart, coins, npcOpen, prodOpen, worldPanel, lite,
     cartCount, cartTotal, level, levelProgress,
     favorites, claimedQuests, usedVoucher,
+    auth, authOpen, openAuth, closeAuth,
     t, go, back, addToCart, setQty, removeItem, clearCart, addCoins,
     isFavorite, toggleFavorite, claimQuest, useVoucher,
     openNPC, closeNPC, openProduct, closeProduct, openWorldPanel, closeWorldPanel, flashMsg,

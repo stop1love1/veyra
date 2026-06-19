@@ -261,7 +261,10 @@ export function createVeyraStore(container, opts) {
     [-6.8, -1.5], [6.8, -1.5],
     [-6.8, 3.5], [6.8, 3.5],
   ];
-  products.slice(0, 6).forEach((p, i) => {
+  // Build one product pedestal+garment+label at slot index `i`. Extracted so
+  // both the initial loop AND the live addProduct() path share identical setup
+  // (registers into productById / pois / markers / labels for inspect + proximity).
+  function buildPedestal(p, i) {
     const [x, z] = slots[i];
     const g = new THREE.Group(); g.position.set(x, 0, z);
     // Low-poly stand: a faceted plinth box-cylinder with a flat cap.
@@ -293,13 +296,24 @@ export function createVeyraStore(container, opts) {
     lab.position.set(x, 3.7, z);
     scene.add(lab);
     pois.push({ id: p.id, type: 'product', pos: new THREE.Vector3(x, 0, z), trig: 2.2 });
+    // Live-added pedestals must also register as a movement blocker so the
+    // player can't walk through them (the init `blockers` array is built once
+    // below from the static pois, so push directly here too).
+    if (blockers) blockers.push({ pos: pois[pois.length - 1].pos, r: 1.1 });
     productById[p.id] = {
       group: g, form, formMat, label: lab, marker: mk,
       pedestalPos: new THREE.Vector3(x, 0, z), baseRot: 0,
     };
-  });
+    return productById[p.id];
+  }
 
-  const blockers = pois.filter((p) => p.type !== 'exit').map((p) => ({ pos: p.pos, r: p.type === 'npc' ? 1.0 : 1.1 }));
+  let usedSlots = 0;
+  // `blockers` is declared after this loop in the original flow; forward-declare
+  // it so buildPedestal can push live blockers. It is populated below for init.
+  let blockers = null;
+  products.slice(0, slots.length).forEach((p, i) => { buildPedestal(p, i); usedSlots = i + 1; });
+
+  blockers = pois.filter((p) => p.type !== 'exit').map((p) => ({ pos: p.pos, r: p.type === 'npc' ? 1.0 : 1.1 }));
 
   // ── Input: keyboard + joystick ───────────────────────────
   const kbd = createKeyboard();
@@ -563,6 +577,21 @@ export function createVeyraStore(container, opts) {
     endInspect() { leaveInspect(); },
     /** Live-retint the currently inspected garment form. No-op if nothing is focused. */
     setInspectColor(hex) { setInspectColorHex(hex); },
+
+    /**
+     * Diegetically stock a new product onto the next free shelf slot.
+     * p: { id, name, price, color }. No-ops if the id already exists or all
+     * slots are full (StoreScreen falls back to a re-init in that case).
+     * Returns true when a pedestal was actually spawned.
+     */
+    addProduct(p) {
+      if (!p || !p.id) return false;
+      if (productById[p.id]) return false;          // already on a shelf
+      if (usedSlots >= slots.length) return false;  // shelves full → caller re-inits
+      buildPedestal(p, usedSlots);
+      usedSlots += 1;
+      return true;
+    },
 
     dispose() {
       disposed = true; running = false; cancelAnimationFrame(raf); ro.disconnect();

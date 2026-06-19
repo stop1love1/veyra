@@ -33,6 +33,14 @@ export class ShopsController {
     return this.shopsService.listPublished();
   }
 
+  // [Seller | Admin] list the shops the caller owns.
+  // Declared BEFORE @Get(':slug') so 'mine' is not captured as a slug param.
+  @Roles(Role.Seller)
+  @Get('mine')
+  mine(@CurrentUser() user: AuthUser) {
+    return this.shopsService.listMine(user.userId);
+  }
+
   // PUBLIC: a single shop by slug.
   @Public()
   @Get(':slug')
@@ -50,10 +58,18 @@ export class ShopsController {
   }
 
   // [Seller | Admin] create. Seller owns the new shop (sellerId = caller).
+  // Self-promotion guard: only an Admin may set `featured` or publish a shop
+  // directly. A non-admin (seller) caller is forced to featured:false /
+  // status:'draft' regardless of what they send in the body, so they cannot
+  // jump the featured/published rail without admin review.
   @Roles(Role.Seller)
   @Post()
   create(@Body() dto: CreateShopDto, @CurrentUser() user: AuthUser) {
-    return this.shopsService.create(dto, user.userId);
+    const data =
+      user.role === Role.Admin
+        ? dto
+        : { ...dto, featured: false, status: 'draft' };
+    return this.shopsService.create(data, user.userId);
   }
 
   // [Seller(own) | Admin] update.

@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { HydratedDocument, Types } from 'mongoose';
+import { Schema as MongooseSchema, HydratedDocument, Types } from 'mongoose';
 import { I18n, I18nSchema } from '../../common/i18n';
 
 /**
@@ -8,10 +8,10 @@ import { I18n, I18nSchema } from '../../common/i18n';
  */
 @Schema({ _id: false })
 export class OrderLine {
-  @Prop({ type: Types.ObjectId, ref: 'Product', required: true })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Product', required: true })
   productId: Types.ObjectId;
 
-  @Prop({ type: Types.ObjectId, ref: 'Shop', required: true, index: true })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Shop', required: true, index: true })
   shopId: Types.ObjectId;
 
   // Snapshot of the bilingual product name at purchase time.
@@ -73,7 +73,7 @@ export type OrderDocument = HydratedDocument<Order>;
  */
 @Schema({ timestamps: true })
 export class Order {
-  @Prop({ type: Types.ObjectId, ref: 'User', required: true, index: true })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true, index: true })
   userId: Types.ObjectId;
 
   @Prop({ type: [OrderLineSchema], default: [] })
@@ -96,7 +96,7 @@ export class Order {
   @Prop({ type: OrderShippingSchema, default: () => ({}) })
   shipping: OrderShipping;
 
-  @Prop({ type: Types.ObjectId, ref: 'Voucher', required: false })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Voucher', required: false })
   voucherId?: Types.ObjectId;
 }
 

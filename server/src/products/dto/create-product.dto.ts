@@ -6,6 +6,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  IsUrl,
   Min,
   ValidateNested,
 } from 'class-validator';
@@ -19,7 +20,7 @@ export class I18nDto {
 }
 
 export class ProductImageDto {
-  @IsString()
+  @IsUrl({ require_protocol: true, protocols: ['http', 'https'] })
   url: string;
 }
 
@@ -69,6 +70,10 @@ export class CreateProductDto {
   @ValidateNested({ each: true })
   @Type(() => ProductImageDto)
   images?: ProductImageDto[];
+
+  @IsOptional()
+  @IsUrl({ require_protocol: true, protocols: ['http', 'https'] })
+  link?: string;
 
   @IsOptional()
   @IsNumber()

@@ -7,10 +7,11 @@ import { useThemeTokens } from './lib/theme/tokens';
 import { Ic } from './components/ui';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { ScreenTransition } from './components/ScreenTransition';
-import { NpcDialogue, ProductPanel, DiegeticPanel } from './components/overlays';
+import { NpcDialogue, ProductPanel, DiegeticPanel, AuthModal } from './components/overlays';
 import {
   GateScreen, SplashScreen, CreateScreen, WorldScreen, StoreScreen,
-  CartScreen, CheckoutScreen, SuccessScreen, QuestsScreen,
+  CartScreen, CheckoutScreen, SuccessScreen, QuestsScreen, SellerScreen,
+  MapEditorScreen,
 } from './features';
 import type { Game, ScreenName } from './lib/game/types';
 
@@ -24,6 +25,8 @@ const SCREENS: Record<ScreenName, ComponentType<{ g: Game }>> = {
   checkout: CheckoutScreen,
   success: SuccessScreen,
   quests: QuestsScreen,
+  seller: SellerScreen,
+  'admin-map': MapEditorScreen,
 };
 
 export default function App() {
@@ -49,8 +52,9 @@ export default function App() {
           </ErrorBoundary>
         </div>
         {g.npcOpen && <NpcDialogue g={g} />}
-        {g.productOpen && <ProductPanel g={g} />}
+        {g.productOpen && <ProductPanel key={g.productOpen} g={g} />}
         {g.worldPanel && <DiegeticPanel g={g} type={g.worldPanel} />}
+        {g.authOpen && <AuthModal g={g} />}
         {flash && <div className="v-flash"><Ic name="check" size={16} /> {flash}</div>}
       </div>
     </div>

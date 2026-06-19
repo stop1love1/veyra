@@ -1,9 +1,24 @@
 // Game state contract shared by every screen.
 import type { Lang } from '../../data/types';
+import type { PublicUser } from '../api/client';
 
 export type ScreenName =
   | 'gate' | 'splash' | 'create' | 'world'
-  | 'store' | 'cart' | 'checkout' | 'success' | 'quests';
+  | 'store' | 'cart' | 'checkout' | 'success' | 'quests' | 'seller'
+  | 'admin-map';
+
+/** Authenticated seller state. Offline-safe: derives from cached veyra_user. */
+export interface AuthState {
+  user: PublicUser | null;
+  token: string | null;
+  role: string | null;            // 'user'|'seller'|'admin'|null
+  isSeller: boolean;              // role==='seller' || role==='admin'
+  isAdmin: boolean;               // role==='admin'
+  login(email: string, password: string): Promise<boolean>;
+  register(email: string, password: string, name: string, asSeller?: boolean): Promise<boolean>;
+  logout(): void;
+  refresh(): Promise<void>;       // re-hydrate user/role via api.me()
+}
 
 export type WorldPanel = 'quests' | 'cart';
 
@@ -89,6 +104,13 @@ export interface Game {
   worldPanel: WorldPanel | null;
   openWorldPanel: (t: WorldPanel) => void;
   closeWorldPanel: () => void;
+
+  /** Seller auth state + actions (offline-safe). */
+  auth: AuthState;
+  /** AuthModal visibility (login/register sheet). */
+  authOpen: boolean;
+  openAuth: () => void;
+  closeAuth: () => void;
 
   lite: boolean;
   flash: (m: string) => void;

@@ -37,6 +37,11 @@ export class ShopsService {
       .exec();
   }
 
+  /** Shops owned by a given seller (newest first). */
+  listMine(sellerId: string): Promise<ShopDocument[]> {
+    return this.shopModel.find({ sellerId }).sort({ createdAt: -1 }).exec();
+  }
+
   /** Public lookup by unique slug (any status). */
   async findBySlugOrFail(slug: string): Promise<ShopDocument> {
     const shop = await this.shopModel.findOne({ slug }).exec();

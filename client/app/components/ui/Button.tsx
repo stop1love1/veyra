@@ -10,13 +10,21 @@ export interface ButtonProps {
   size?: ButtonSize;
   icon?: string;
   full?: boolean;
+  disabled?: boolean;
   onClick?: () => void;
   style?: CSSProperties;
 }
 
-export function Button({ children, variant = 'primary', size = 'md', icon, full, onClick, style = {} }: ButtonProps) {
+export function Button({ children, variant = 'primary', size = 'md', icon, full, disabled, onClick, style = {} }: ButtonProps) {
   return (
-    <button className={`v-btn v-btn-${variant} v-btn-${size}${full ? ' v-btn-full' : ''}`} onClick={onClick} style={style}>
+    <button
+      type="button"
+      className={`v-btn v-btn-${variant} v-btn-${size}${full ? ' v-btn-full' : ''}`}
+      onClick={disabled ? undefined : onClick}
+      disabled={disabled}
+      aria-disabled={disabled || undefined}
+      style={disabled ? { opacity: 0.5, ...style } : style}
+    >
       {icon && <Icon name={icon} size={size === 'sm' ? 16 : 19} />}
       {children && <span>{children}</span>}
     </button>

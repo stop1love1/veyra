@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { HydratedDocument, Types } from 'mongoose';
+import { Schema as MongooseSchema, HydratedDocument, Types } from 'mongoose';
 
 /**
  * A single line in a user's cart. A line is uniquely identified within a cart
@@ -8,7 +8,7 @@ import { HydratedDocument, Types } from 'mongoose';
  */
 @Schema({ _id: false })
 export class CartLine {
-  @Prop({ type: Types.ObjectId, ref: 'Product', required: true })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Product', required: true })
   productId: Types.ObjectId;
 
   @Prop({ type: String, default: '' })
@@ -28,7 +28,7 @@ export type CartDocument = HydratedDocument<Cart>;
 @Schema({ timestamps: true })
 export class Cart {
   // One cart per user.
-  @Prop({ type: Types.ObjectId, ref: 'User', required: true, unique: true, index: true })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true, unique: true, index: true })
   userId: Types.ObjectId;
 
   @Prop({ type: [CartLineSchema], default: [] })

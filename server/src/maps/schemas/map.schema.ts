@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { HydratedDocument, Types } from 'mongoose';
+import { Schema as MongooseSchema, HydratedDocument, Types } from 'mongoose';
 
 /**
  * Directional sun lighting for the map environment.
@@ -131,7 +131,7 @@ export class ShopSlot {
   @Prop({ type: Number, default: 0 })
   ry: number;
 
-  @Prop({ type: Types.ObjectId, ref: 'Shop', required: false })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Shop', required: false })
   shopId?: Types.ObjectId;
 }
 
@@ -151,7 +151,7 @@ export class NpcSlot {
   @Prop({ type: Number, default: 0 })
   ry: number;
 
-  @Prop({ type: Types.ObjectId, ref: 'Npc', required: false })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Npc', required: false })
   npcId?: Types.ObjectId;
 }
 
@@ -216,7 +216,7 @@ export class Map {
   @Prop({ type: Date, required: false })
   publishedAt?: Date;
 
-  @Prop({ type: Types.ObjectId, ref: 'User', required: false, index: true })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: false, index: true })
   createdBy?: Types.ObjectId;
 }
 

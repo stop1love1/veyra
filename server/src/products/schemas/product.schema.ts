@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { HydratedDocument, Types } from 'mongoose';
+import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
 import { I18n, I18nSchema } from '../../common/i18n';
 
 /**
@@ -19,7 +19,7 @@ export type ProductDocument = HydratedDocument<Product>;
 @Schema({ timestamps: true })
 export class Product {
   // Owning shop. Ownership (seller) is resolved through the shop's sellerId.
-  @Prop({ type: Types.ObjectId, ref: 'Shop', required: true, index: true })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Shop', required: true, index: true })
   shopId: Types.ObjectId;
 
   @Prop({ type: I18nSchema, required: true })
@@ -44,11 +44,15 @@ export class Product {
   tags: I18n[];
 
   // Optional 3D model for the product (asset library Item).
-  @Prop({ type: Types.ObjectId, ref: 'Item', required: false })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Item', required: false })
   modelItemId?: Types.ObjectId;
 
   @Prop({ type: [ProductImageSchema], default: [] })
   images: ProductImage[];
+
+  // Optional external buy link (the seller's own store / marketplace URL).
+  @Prop({ type: String, required: false })
+  link?: string;
 
   @Prop({ type: Number, default: 0 })
   rating: number;
@@ -56,7 +60,9 @@ export class Product {
   @Prop({ type: Number, default: 0 })
   sold: number;
 
-  @Prop({ type: Number, default: 0 })
+  // Default to in-stock so a freshly-added product is immediately buyable in-app.
+  // Sellers can set an exact inventory via the create/update DTO (stock field).
+  @Prop({ type: Number, default: 100 })
   stock: number;
 
   @Prop({

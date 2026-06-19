@@ -24,6 +24,7 @@ export type ProductWrite = {
   tags?: unknown;
   modelItemId?: string;
   images?: unknown;
+  link?: string;
   rating?: number;
   sold?: number;
   stock?: number;

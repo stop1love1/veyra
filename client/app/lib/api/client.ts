@@ -184,6 +184,56 @@ export interface ApiMapInstance {
   shadow?: boolean;
 }
 
+// ── Orders ─────────────────────────────────────────────────────────────────
+export type OrderStatus = 'pending' | 'paid' | 'shipped' | 'done' | 'cancelled';
+
+export interface ApiOrderLine {
+  productId?: string;
+  shopId?: string;
+  name?: I18nField | string;
+  price?: number;
+  qty?: number;
+  size?: string;
+  color?: number;
+}
+
+export interface ApiOrder {
+  _id?: string;
+  id?: string;
+  userId?: string;
+  lines?: ApiOrderLine[];
+  total?: number;
+  status?: OrderStatus | string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+// ── Items (admin palette) ──────────────────────────────────────────────────
+export interface ApiItem {
+  _id?: string;            // ObjectId — REQUIRED to place an instance
+  id?: string;
+  key?: string;
+  name?: I18nField | string;
+  category?: string;
+  tags?: string[];
+  status?: string;
+  asset?: { glb?: { url?: string }; thumbnail?: { url?: string } };
+  transformDefaults?: { scale?: number; yOffset?: number; faceAxis?: string };
+}
+
+/** Mirrors server CreateMapInstanceDto. pos/rot are partial Vec3. */
+export interface MapInstanceDto {
+  itemId: string;          // 24-hex ObjectId (item._id)
+  transform?: {
+    pos?: { x?: number; y?: number; z?: number };
+    rot?: { x?: number; y?: number; z?: number };
+    scale?: number;
+  };
+  layer?: 'ground' | 'roads' | 'buildings' | 'props' | 'skyline';
+  shadow?: boolean;
+  props?: Record<string, unknown>;
+}
+
 export interface ApiShop {
   _id?: string;
   id?: string;
@@ -209,18 +259,57 @@ export interface ApiProduct {
   colors?: (number | string)[];
   sizes?: string[];
   tag?: I18nField | string;
+  images?: { url: string }[];
+  link?: string;
+  stock?: number;
+}
+
+/** The authenticated user doc as returned by /auth/me and login/register. */
+export interface PublicUser {
+  id: string;
+  email: string;
+  name: string;
+  role: string;
+  coins?: number;
 }
 
 export interface AuthResult {
   accessToken?: string;
   token?: string;
-  user?: { id: string; email: string; name: string; role: string };
+  refreshToken?: string;
+  user?: PublicUser;
 }
 
 export interface Credentials {
   email: string;
   password: string;
   name?: string;
+  /** Self-serve seller signup (register only). Server constrains to user|seller. */
+  role?: 'user' | 'seller';
+}
+
+/** Product create/update payload — mirrors the server CreateProductDto. */
+export interface ProductDto {
+  shopId: string;
+  name: I18nField;
+  blurb?: I18nField;          // description → blurb
+  price: number;
+  colors?: number[];          // hex ints
+  sizes?: string[];
+  tags?: I18nField[];
+  images?: { url: string }[];
+  link?: string;              // external buy URL
+  stock?: number;             // server default 100
+}
+
+/** Shop create payload — mirrors the server CreateShopDto. */
+export interface ShopDto {
+  name: I18nField;
+  slug: string;
+  category?: I18nField;
+  blurb?: I18nField;
+  hue?: number;
+  status?: string;
 }
 
 // ── Typed endpoint helpers ─────────────────────────────────────────────────
@@ -277,13 +366,100 @@ export const api = {
     });
   },
 
-  /** Register a new account. Persists the returned token if one is issued. */
+  /** Register a new account (optionally as a seller). Persists the token. */
   register(creds: Credentials, opts?: RequestOptions): Promise<AuthResult> {
     return http.post<AuthResult>('/auth/register', creds, opts).then((res) => {
       const tok = res.accessToken || res.token;
       if (tok) setToken(tok);
       return res;
     });
+  },
+
+  /** The currently-authenticated user doc (requires a bearer token). */
+  me(opts?: RequestOptions): Promise<PublicUser> {
+    return http.get<PublicUser>('/auth/me', opts);
+  },
+
+  /** Shops owned by the current seller. */
+  myShops(opts?: RequestOptions): Promise<ApiShop[]> {
+    return http.get<ApiShop[] | { data: ApiShop[] }>('/shops/mine', opts).then(asArray<ApiShop>);
+  },
+
+  /** Create a shop (server sets sellerId from the token). */
+  createShop(dto: ShopDto, opts?: RequestOptions): Promise<ApiShop> {
+    return http.post<ApiShop>('/shops', dto, opts);
+  },
+
+  /** Create a product in a shop the caller owns. */
+  createProduct(dto: ProductDto, opts?: RequestOptions): Promise<ApiProduct> {
+    return http.post<ApiProduct>('/products', dto, opts);
+  },
+
+  /** Update an owned product. */
+  updateProduct(id: string, dto: Partial<ProductDto>, opts?: RequestOptions): Promise<ApiProduct> {
+    return http.patch<ApiProduct>(`/products/${encodeURIComponent(id)}`, dto, opts);
+  },
+
+  /** Delete an owned product. */
+  deleteProduct(id: string, opts?: RequestOptions): Promise<void> {
+    return http.delete<void>(`/products/${encodeURIComponent(id)}`, opts);
+  },
+
+  // ── Orders (role-scoped server-side) ──
+  /** Orders visible to the caller (admin=all, seller=own shops, user=own). */
+  getOrders(opts?: RequestOptions): Promise<ApiOrder[]> {
+    return http.get<ApiOrder[] | { data: ApiOrder[] }>('/orders', opts).then(asArray<ApiOrder>);
+  },
+
+  /** Advance/cancel an order's status (seller/admin). */
+  updateOrderStatus(id: string, status: OrderStatus, opts?: RequestOptions): Promise<ApiOrder> {
+    return http.patch<ApiOrder>(`/orders/${encodeURIComponent(id)}/status`, { status }, opts);
+  },
+
+  // ── Items (admin palette) ──
+  /** Item dictionary (admin only). */
+  getItems(opts?: RequestOptions): Promise<ApiItem[]> {
+    return http.get<ApiItem[] | { data: ApiItem[] }>('/items', opts).then(asArray<ApiItem>);
+  },
+
+  // ── Map editor (admin) ──
+  /** Resolve a map by slug to its document (so the editor can read its id). */
+  getMapBySlug(slug: string, opts?: RequestOptions): Promise<ApiMap | null> {
+    return http
+      .get<ApiMap | { map: ApiMap }>(`/maps/${encodeURIComponent(slug)}`, opts)
+      .then((res) => (res && 'map' in (res as object) ? (res as { map: ApiMap }).map : (res as ApiMap)));
+  },
+
+  /** Place a new item instance on a (draft) map. itemId must be a 24-hex ObjectId. */
+  createMapInstance(mapId: string, dto: MapInstanceDto, opts?: RequestOptions): Promise<ApiMapInstance> {
+    return http.post<ApiMapInstance>(`/maps/${encodeURIComponent(mapId)}/instances`, dto, opts);
+  },
+
+  /** Update a placed instance (transform/layer/etc). */
+  updateMapInstance(
+    mapId: string,
+    iid: string,
+    dto: Partial<MapInstanceDto>,
+    opts?: RequestOptions,
+  ): Promise<ApiMapInstance> {
+    return http.patch<ApiMapInstance>(
+      `/maps/${encodeURIComponent(mapId)}/instances/${encodeURIComponent(iid)}`,
+      dto,
+      opts,
+    );
+  },
+
+  /** Remove a placed instance. */
+  deleteMapInstance(mapId: string, iid: string, opts?: RequestOptions): Promise<void> {
+    return http.delete<void>(
+      `/maps/${encodeURIComponent(mapId)}/instances/${encodeURIComponent(iid)}`,
+      opts,
+    );
+  },
+
+  /** Publish a draft map. */
+  publishMap(mapId: string, opts?: RequestOptions): Promise<ApiMap> {
+    return http.post<ApiMap>(`/maps/${encodeURIComponent(mapId)}/publish`, undefined, opts);
   },
 };
 

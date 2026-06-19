@@ -57,6 +57,9 @@ function mapProduct(p: ApiProduct, i: number): Product {
     desc: toLocalized(p.blurb, ''),
     colors,
     sizes: p.sizes && p.sizes.length ? p.sizes : ['One'],
+    images: (p.images || []).map((im) => im.url).filter(Boolean),
+    link: p.link,
+    stock: typeof p.stock === 'number' ? p.stock : undefined,
   };
 }
 

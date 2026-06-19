@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { HydratedDocument, Types } from 'mongoose';
+import { Schema as MongooseSchema, HydratedDocument, Types } from 'mongoose';
 import { I18n, I18nSchema } from '../../common/i18n';
 
 /**
@@ -24,7 +24,7 @@ export class QuestReward {
   @Prop({ type: Number, required: false })
   coins?: number;
 
-  @Prop({ type: Types.ObjectId, ref: 'Voucher', required: false })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Voucher', required: false })
   voucherId?: Types.ObjectId;
 }
 

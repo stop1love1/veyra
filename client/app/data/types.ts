@@ -46,6 +46,12 @@ export interface Product {
   desc: Localized;
   colors: string[];
   sizes: string[];
+  /** Image URLs (mapped from server images[].url). Optional for static catalog. */
+  images?: string[];
+  /** External buy link (seller-supplied). */
+  link?: string;
+  /** Inventory count (server default 100). */
+  stock?: number;
 }
 
 export interface Quest {

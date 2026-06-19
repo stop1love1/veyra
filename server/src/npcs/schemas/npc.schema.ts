@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { HydratedDocument, Types } from 'mongoose';
+import { Schema as MongooseSchema, HydratedDocument, Types } from 'mongoose';
 import { I18n, I18nSchema } from '../../common/i18n';
 
 /**
@@ -90,24 +90,24 @@ export class Npc {
   appearance: NpcAppearance;
 
   // optional 3D model (else default avatar)
-  @Prop({ type: Types.ObjectId, ref: 'Item', required: false, index: true })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Item', required: false, index: true })
   modelItemId?: Types.ObjectId;
 
   @Prop({ type: [NpcDialogueSchema], default: [] })
   dialogue: NpcDialogue[];
 
   // if this NPC is a shop advisor
-  @Prop({ type: Types.ObjectId, ref: 'Shop', required: false, index: true })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Shop', required: false, index: true })
   shopId?: Types.ObjectId;
 
   @Prop({ type: NpcBehaviorSchema, default: () => ({}) })
   behavior: NpcBehavior;
 
   // optional linked account (role=npc)
-  @Prop({ type: Types.ObjectId, ref: 'User', required: false, index: true })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: false, index: true })
   accountUserId?: Types.ObjectId;
 
-  @Prop({ type: Types.ObjectId, ref: 'User', required: true, index: true })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true, index: true })
   createdBy: Types.ObjectId;
 
   @Prop({

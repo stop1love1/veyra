@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { HydratedDocument, Types } from 'mongoose';
+import { Schema as MongooseSchema, HydratedDocument, Types } from 'mongoose';
 
 export type VoucherDocument = HydratedDocument<Voucher>;
 
@@ -23,7 +23,7 @@ export class Voucher {
   value: number;
 
   // Optional owning seller. Null/undefined → platform-wide (admin) voucher.
-  @Prop({ type: Types.ObjectId, ref: 'User', required: false, index: true })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: false, index: true })
   sellerId?: Types.ObjectId;
 
   @Prop({ type: Date, required: false })
