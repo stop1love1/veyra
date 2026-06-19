@@ -403,6 +403,9 @@ export function createVeyraWorld(container, opts) {
   let nearGate = null;                         // gate the guest is standing at (or null)
   let autoEnter = null;                        // { a } — after a ticket clears, auto-walk the player IN
   let nameTag = null;                          // floating username sprite above the player
+  let vy = 0;                                  // player vertical velocity (jump)
+  const liveGuards = [];                       // detailed guards to idle-animate { g, ph }
+  let perim = null;                            // instanced perimeter-guard patrol state
 
   // ─────────────────────────────────────────────────────────────────────────
   //  BUILD — runs after the data fetch resolves (or after a fallback on error).
@@ -1184,15 +1187,6 @@ export function createVeyraWorld(container, opts) {
     const inGap = (a) => GATES.some((g) => angDiff(a, g.a) < GAP_HALF);
     const STYLES = ['minimal', 'street', 'soft'];
     const LABELS = opts.labels || { security: 'Bảo an', checker: 'Soát vé', visitor: 'Khách' };
-    const placeNPC = (x, z, hue, style, ry) => {
-      const c = buildAvatar({ hue, style });
-      c.group.position.set(x, 0, z);
-      c.group.rotation.y = ry != null ? ry : 0;
-      c.group.scale.setScalar(0.98);
-      if (c.setStyle) c.setStyle(style);
-      const tag = makeTag(LABELS.visitor, 'rgba(180,200,210,0.9)'); tag.position.set(0, 2.15, 0); c.group.add(tag);
-      scene.add(c.group);
-    };
 
     const postMat = new THREE.MeshStandardMaterial({ color: hsl(212, 0.08, 0.30), roughness: 0.55, metalness: 0.45 });
     const railMat = new THREE.MeshStandardMaterial({ color: hsl(212, 0.06, 0.24), roughness: 0.5, metalness: 0.55 });
@@ -1264,6 +1258,7 @@ export function createVeyraWorld(container, opts) {
       tag.position.set(0, 2.15, 0); c.group.add(tag);
       scene.add(c.group);
       circles.push({ x, z, r: 0.45 });   // solid — no walking through a guard
+      liveGuards.push({ g: c, ph: liveGuards.length * 0.7 });   // idle-animate in the loop
     };
 
     // ── the four cardinal gates: pillars + lintel + label banner + NPCs ──
@@ -1298,14 +1293,29 @@ export function createVeyraWorld(container, opts) {
       banner.position.set(cxg, 4.05, czg); banner.rotation.y = Math.PI / 2 - g.a;
       scene.add(banner); ownedGeoms.push(banner.geometry);
       const rec = fenceGates[fenceGates.length - 1];
-      // Closed barrier across the gap (only for guests). Hidden + its collision
-      // skipped once openGate(key) accepts the ticket.
+      // Two solid TIMBER GATE LEAVES fill the opening (only for guests). They
+      // slide apart when openGate(key) accepts the ticket; their shared collision
+      // is skipped once open. rec.openT animates 0 (shut) → 1 (open) in the loop.
       if (gated) {
         const barLen = halfGapM * 2;
-        const bar = new THREE.Mesh(new THREE.BoxGeometry(barLen, 0.5, 0.2), railMat);
-        bar.position.set(cxg, 1.15, czg); bar.rotation.y = -tan; bar.castShadow = true; scene.add(bar);
-        ownedGeoms.push(bar.geometry);
-        rec.bar = bar;
+        const leafW = halfGapM;                 // each leaf covers half the gap
+        rec.leaves = [];
+        for (const sgn of [-1, 1]) {
+          const cx = cxg + tx * sgn * (leafW / 2), cz = czg + tz * sgn * (leafW / 2);
+          const leaf = new THREE.Group();
+          leaf.position.set(cx, 0, cz); leaf.rotation.y = -tan;
+          const panel = new THREE.Mesh(new THREE.BoxGeometry(leafW * 0.98, 3.1, 0.18), darkWood);
+          panel.position.y = 1.65; panel.castShadow = true; panel.receiveShadow = true; leaf.add(panel); ownedGeoms.push(panel.geometry);
+          for (const by of [0.9, 2.4]) {        // two iron braces (accent)
+            const brace = new THREE.Mesh(new THREE.BoxGeometry(leafW * 0.98, 0.18, 0.22), redPaint);
+            brace.position.set(0, by, 0); leaf.add(brace); ownedGeoms.push(brace.geometry);
+          }
+          const ring = new THREE.Mesh(new THREE.TorusGeometry(0.16, 0.04, 6, 12), pillarMat);
+          ring.position.set(-sgn * (leafW * 0.4), 1.6, 0.12); ring.rotation.x = Math.PI / 2; leaf.add(ring); ownedGeoms.push(ring.geometry);
+          scene.add(leaf);
+          rec.leaves.push({ grp: leaf, cx, cz, dx: tx * sgn, dz: tz * sgn, w: leafW });
+        }
+        rec.openT = 0;
         const steps = Math.max(4, Math.round(barLen / 2));
         for (let s2 = 0; s2 <= steps; s2++) {
           const tt2 = s2 / steps - 0.5;
@@ -1319,11 +1329,7 @@ export function createVeyraWorld(container, opts) {
         placeGuard(cxg + Math.cos(g.a) * 4 + tx * sgn * (halfGapM - 2),
                    czg + Math.sin(g.a) * 4 + tz * sgn * (halfGapM - 2), out, true);
       }
-      const perGate = q.tier === 'low' ? 0 : 1;
-      for (let k = 0; k < perGate; k++) {
-        placeNPC(cxg + Math.cos(g.a) * 8 + tx * 5, czg + Math.sin(g.a) * 8 + tz * 5,
-                 (g.hue + 40) % 360, STYLES[k % 3], out);
-      }
+      // (No civilian NPCs at the gate — the "guest" is the unauthenticated player.)
     }
 
     // Dense perimeter guard line — a security officer every few metres along the
@@ -1373,6 +1379,9 @@ export function createVeyraWorld(container, opts) {
         im.frustumCulled = false;   // instances ring the whole map — don't cull the set as one
         scene.add(im); ownedInstanced.push(im);
       }
+      const ph = new Float32Array(N);
+      for (let i = 0; i < N; i++) ph[i] = (i * 1.7) % 6.283;
+      perim = { body, head, capI, slots, ph, ringR, N, m, qq, up, scl, pos };
     })();
     // Guide the guest: a short file of guards in the apron north of the spawn,
     // shepherding new arrivals down to the North gate's checkpoint.
@@ -1382,13 +1391,6 @@ export function createVeyraWorld(container, opts) {
       }
     }
     // A few civilians milling for life.
-    const extra = q.tier === 'low' ? 0 : 5;
-    for (let i = 0; i < extra; i++) {
-      const a = (i / extra) * Math.PI * 2 + 0.9;
-      if (inGap(a)) continue;
-      const rr = FENCE_R + 8 + hash01(i * 5.3, 2.1) * 14;
-      placeNPC(Math.cos(a) * rr, Math.sin(a) * rr, (i * 53) % 360, STYLES[i % 3], faceOut(a));
-    }
   }
 
   // ════════════════════════ Landmark builders ═══════════════════════════════
@@ -1677,8 +1679,8 @@ export function createVeyraWorld(container, opts) {
       add(items.awnings(places));   // procedural fallback
     };
 
-    const lampP = [], bikeP = [], peopleP = [], signP = [], awnP = [], planterP = [], stallP = [], cafeP = [];
-    const bikeP2 = [], vendP = [];   // bicycles, shoulder-pole vendors (Task 7)
+    const lampP = [], peopleP = [], signP = [], awnP = [], planterP = [], stallP = [], cafeP = [];
+    const vendP = [], flagP = [], kumquatP = [];   // shoulder-pole vendors, VN flags, potted ornamental trees
     const poleRuns = [];
 
     // ── Building lookups: reject placements that fall inside (or just inside the
@@ -1754,7 +1756,7 @@ export function createVeyraWorld(container, opts) {
       let lampAcc = 0;      // distance since last lamp
       let poleAcc = 0;      // distance since last pole
       let signAcc = 0;      // distance since last awning/sign
-      let bikeAcc = 0;      // distance since last bike row
+      let flagAcc = 0;      // distance since last Vietnamese flag
       let lampSide = 1;     // alternating lamp side
 
       for (let si = 0; si < pts.length - 1; si++) {
@@ -1793,21 +1795,13 @@ export function createVeyraWorld(container, opts) {
             polePts.push({ x: px + nx * (hw + 1.3), z: pz + nz * (hw + 1.3) });
           }
 
-          // parked MOTORBIKES along wider curbs, BOTH sides, in short rows.
-          bikeAcc += STEP;
-          if (hw >= 2.5 && bikeAcc >= 7) {
-            bikeAcc = 0;
-            for (const side of [1, -1]) {
-              if (hash01(px * 1.1 + side * 3.7, pz * 1.1 - 2.9) < 0.7 * dens) {
-                const rowLen = 1 + Math.floor(hash01(px + side * 5.5, pz + 2.2) * 3); // 2..4 bikes
-                for (let k = 0; k <= rowLen; k++) {
-                  const bx = px + nx * (hw - 0.6) * side + tx * k * 0.85;
-                  const bz = pz + nz * (hw - 0.6) * side + tz * k * 0.85;
-                  if (pointInBuildings(bx, bz, 0.3)) continue;
-                  bikeP.push({ x: bx, z: bz, ry: ry + (Math.PI / 2) * side });
-                }
-              }
-            }
+          // VIETNAMESE FLAGS (cờ đỏ sao vàng) on building façades, ~every 26 m.
+          flagAcc += STEP;
+          if (flagAcc >= 26) {
+            flagAcc = 0;
+            const side = hash01(px + 5.1, pz + 2.2) < 0.5 ? 1 : -1;
+            const fx = px + nx * (hw + 0.3) * side, fz = pz + nz * (hw + 0.3) * side;
+            if (facadeWithin(fx, fz, 3.5)) flagP.push({ x: fx, z: fz, ry: ry + (Math.PI / 2) * side });
           }
 
           // pedestrians: rare per step on a sidewalk side, random facing.
@@ -1830,11 +1824,11 @@ export function createVeyraWorld(container, opts) {
             }
           }
 
-          // occasional parked BICYCLE on the curb (Task 7).
-          if (hw >= 2 && hash01(px * 1.3 + 4.1, pz * 1.3 - 6.2) < 0.10 * dens) {
-            const bside = hash01(px + 2.1, pz) < 0.5 ? 1 : -1;
-            const cbx = px + nx * (hw - 0.4) * bside, cbz = pz + nz * (hw - 0.4) * bside;
-            if (!pointInBuildings(cbx, cbz, 0.3) && spacingOk(cbx, cbz, 1.5)) { bikeP2.push({ x: cbx, z: cbz, ry: ry + (Math.PI / 2) * bside }); spaceAdd(cbx, cbz); }
+          // potted ornamental tree (cây cảnh / quất) on the sidewalk, occasionally.
+          if (hw >= 2 && hash01(px * 1.3 + 4.1, pz * 1.3 - 6.2) < 0.09 * dens) {
+            const kside = hash01(px + 2.1, pz) < 0.5 ? 1 : -1;
+            const kx = px + nx * (hw + 0.4) * kside, kz = pz + nz * (hw + 0.4) * kside;
+            if (!pointInBuildings(kx, kz, 0.3) && spacingOk(kx, kz, 2.0)) { kumquatP.push({ x: kx, z: kz }); spaceAdd(kx, kz); }
           }
           // rare shoulder-pole VENDOR on a sidewalk (Task 7).
           if (hseed > 0.965 && hseed < 0.985) {
@@ -1894,9 +1888,7 @@ export function createVeyraWorld(container, opts) {
     }
 
     // Caps by tier before building.
-    const bikeCap = q.tier === 'low' ? 350 : q.tier === 'mid' ? 900 : 1600;
     const peopleCap = q.tier === 'low' ? 150 : q.tier === 'mid' ? 450 : 750;
-    if (bikeP.length > bikeCap) bikeP.length = bikeCap;
     if (peopleP.length > peopleCap) peopleP.length = peopleCap;
     if (lampP.length > 450) lampP.length = 450;
     if (signP.length > 500) signP.length = 500;
@@ -1904,10 +1896,12 @@ export function createVeyraWorld(container, opts) {
     if (planterP.length > 400) planterP.length = 400;
     if (stallP.length > 120) stallP.length = 120;
     if (cafeP.length > 120) cafeP.length = 120;
-    const bike2Cap = q.tier === 'low' ? 60 : q.tier === 'mid' ? 180 : 320;
-    if (bikeP2.length > bike2Cap) bikeP2.length = bike2Cap;
     const vendCap = q.tier === 'low' ? 12 : q.tier === 'mid' ? 30 : 50;
     if (vendP.length > vendCap) vendP.length = vendCap;
+    const flagCap = q.tier === 'low' ? 80 : q.tier === 'mid' ? 220 : 380;
+    if (flagP.length > flagCap) flagP.length = flagCap;
+    const kumquatCap = q.tier === 'low' ? 60 : q.tier === 'mid' ? 160 : 300;
+    if (kumquatP.length > kumquatCap) kumquatP.length = kumquatCap;
 
     // Furniture collision (so the player can't walk THROUGH solid items). Pushed
     // here; the spatial grid is built once at the end of build() after these.
@@ -1916,23 +1910,22 @@ export function createVeyraWorld(container, opts) {
     for (const p of stallP) circles.push({ x: p.x, z: p.z, r: 1.4 });
     for (const p of cafeP) circles.push({ x: p.x, z: p.z, r: 1.3 });
     for (const p of planterP) circles.push({ x: p.x, z: p.z, r: 0.5 });
-    for (const p of bikeP) circles.push({ x: p.x, z: p.z, r: 0.6 });
-    for (const p of bikeP2) circles.push({ x: p.x, z: p.z, r: 0.5 });
     for (const p of vendP) circles.push({ x: p.x, z: p.z, r: 0.6 });
+    for (const p of kumquatP) circles.push({ x: p.x, z: p.z, r: 0.4 });
 
     // Build + add (each builder returns a Group). Awnings use a GLB path when the
-    // citykit detail is loaded (Task 12); otherwise the procedural builder.
+    // citykit detail is loaded; otherwise the procedural builder. (No vehicles.)
     add(items.lampPosts(lampP));
     for (const run of poleRuns) add(items.powerLines(run));
-    add(items.motorbikes(bikeP));
     add(items.people(peopleP));
     addAwnings(awnP);
     add(items.hangingSigns(signP));
     add(items.planters(planterP));
     add(items.stalls(stallP));
     add(items.cafes(cafeP));
-    add(items.bicycles(bikeP2));
     add(items.vendors(vendP));
+    add(items.flags(flagP));
+    add(items.kumquat(kumquatP));
   }
 
   // Find a road vertex near the lake's north shore to spawn on (real street).
@@ -2158,7 +2151,8 @@ export function createVeyraWorld(container, opts) {
       mvz = rgtZ * ix + fwdZ * (-iz);
     }
     if (moving) {
-      pp.x += mvx * SPEED * dt; pp.z += mvz * SPEED * dt;
+      const SP = SPEED * (keys['shift'] && !autoEnter ? 1.9 : 1);   // shift = run
+      pp.x += mvx * SP * dt; pp.z += mvz * SP * dt;
 
       const pr = Math.hypot(pp.x, pp.z);
       if (entered) {
@@ -2236,7 +2230,16 @@ export function createVeyraWorld(container, opts) {
       }
     }
     if (islandInfo) { const di = islandInfo; if (Math.hypot(pp.x - di.x, pp.z - di.z) <= di.r - 0.4) targetY = Math.max(targetY, di.deckY); }
-    pp.y += (targetY - pp.y) * Math.min(1, dt * 9);
+    // Jump (space) + gravity. Grounded → smooth-follow terrain (bridge/island);
+    // airborne → integrate vertical velocity.
+    const baseY = targetY;
+    if (keys[' '] && vy === 0 && pp.y <= baseY + 0.06) vy = 6.4;
+    if (vy !== 0 || pp.y > baseY + 0.02) {
+      vy -= 18 * dt; pp.y += vy * dt;
+      if (pp.y <= baseY) { pp.y = baseY; vy = 0; }
+    } else {
+      pp.y += (baseY - pp.y) * Math.min(1, dt * 9);
+    }
 
     const sp = moving ? mag : 0;
     phase += dt * (6 + sp * 4) * (moving ? 1 : 0);
@@ -2332,6 +2335,7 @@ export function createVeyraWorld(container, opts) {
     swayUniforms.uTime.value = t;
     swayUniforms.uWind.value = windAmt;
     swayUniforms.uWindDir.value = windDir;
+    items.setWind && items.setWind(t, windAmt, windDir);   // flutter the Vietnamese flags
     // Night factor from real sun elevation: street lamps, lanterns, signs AND the
     // city's windows light up as the sun sets, dim out after sunrise.
     const sunElev = environment.getSunElevation ? environment.getSunElevation() : 1;
@@ -2358,6 +2362,34 @@ export function createVeyraWorld(container, opts) {
       if (it.marker) {
         it.marker.rotation.z = t * 1.0 + i;
         it.marker.position.y = it.markerBaseY + Math.sin(t * 1.4 + i) * 0.12;
+      }
+
+      // Gate leaves sliding open + lively guards (idle bob / look-around / sway).
+      for (const fg of fenceGates) {
+        if (!fg.leaves) continue;
+        const tgt = fg.openTarget || 0;
+        if (Math.abs(fg.openT - tgt) > 0.001) {
+          fg.openT += (tgt - fg.openT) * Math.min(1, dt * 2.6);
+          for (const lf of fg.leaves) lf.grp.position.set(lf.cx + lf.dx * lf.w * fg.openT, 0, lf.cz + lf.dz * lf.w * fg.openT);
+        }
+      }
+      for (let gi = 0; gi < liveGuards.length; gi++) {
+        const gp = liveGuards[gi].g.parts, p2 = liveGuards[gi].ph;
+        gp.torso.position.y = 1.05 + Math.abs(Math.sin(t * 1.7 + p2)) * 0.03;
+        gp.head.rotation.y = Math.sin(t * 0.5 + p2) * 0.45;
+        gp.armL.rotation.x = Math.sin(t * 1.3 + p2) * 0.12;
+        gp.armR.rotation.x = -Math.sin(t * 1.3 + p2) * 0.12;
+      }
+      if (perim) {
+        const P = perim;
+        for (let pi = 0; pi < P.N; pi++) {
+          const a = P.slots[pi], pp2 = P.ph[pi];
+          P.qq.setFromAxisAngle(P.up, Math.atan2(Math.cos(a), Math.sin(a)) + Math.sin(t * 0.6 + pp2) * 0.25);
+          P.pos.set(Math.cos(a) * P.ringR, Math.abs(Math.sin(t * 2.2 + pp2)) * 0.05, Math.sin(a) * P.ringR);
+          P.m.compose(P.pos, P.qq, P.scl);
+          P.body.setMatrixAt(pi, P.m); P.head.setMatrixAt(pi, P.m); P.capI.setMatrixAt(pi, P.m);
+        }
+        P.body.instanceMatrix.needsUpdate = true; P.head.instanceMatrix.needsUpdate = true; P.capI.instanceMatrix.needsUpdate = true;
       }
       if (it.glow) {
         it.glowMat.opacity = 0.35 + 0.25 * (0.5 + 0.5 * Math.sin(t * 2.2 + i));
@@ -2498,7 +2530,7 @@ export function createVeyraWorld(container, opts) {
     openGate(key) {
       openGates[key] = true;
       let a = null;
-      for (const fg of fenceGates) if (fg.key === key) { if (fg.bar) fg.bar.visible = false; a = fg.a; }
+      for (const fg of fenceGates) if (fg.key === key) { fg.openTarget = 1; a = fg.a; }
       if (a != null) autoEnter = { a };   // guard opens the gate → auto-walk the player inside
     },
     recenter() {

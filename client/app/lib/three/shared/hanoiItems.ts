@@ -99,6 +99,48 @@ export function createHanoiItems(THREEarg) {
     for (const [m, base] of _emissiveBases) m.emissiveIntensity = base * (0.15 + 1.6 * k);
   }
 
+  // Terracotta pot + ripe-kumquat orange (potted ornamental trees / cây cảnh).
+  const terracotta = std(hsl(18, 0.45, 0.42), 0.85, 0.0);
+  const fruitOrange = std(hsl(30, 0.85, 0.5), 0.6, 0.0);
+
+  // ── Vietnamese flag (cờ đỏ sao vàng): red cloth + a yellow 5-point star ──
+  function makeFlagTexture() {
+    const c = (typeof document !== 'undefined') ? document.createElement('canvas') : new OffscreenCanvas(192, 128);
+    c.width = 192; c.height = 128;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#da251d'; ctx.fillRect(0, 0, 192, 128);           // flag red
+    ctx.fillStyle = '#ff0'; ctx.beginPath();                          // yellow star
+    const cx = 96, cy = 64, R = 38, r = R * 0.382;
+    for (let i = 0; i < 10; i++) {
+      const ang = -Math.PI / 2 + i * Math.PI / 5;
+      const rad = i % 2 === 0 ? R : r;
+      const x = cx + Math.cos(ang) * rad, y = cy + Math.sin(ang) * rad;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.closePath(); ctx.fill();
+    const tex = new T.CanvasTexture(c); tex.colorSpace = T.SRGBColorSpace; tex.needsUpdate = true;
+    return tex;
+  }
+  const flagTex = makeFlagTexture();
+  const flagMat = M(new T.MeshStandardMaterial({ map: flagTex, roughness: 0.85, metalness: 0.0, side: T.DoubleSide }));
+
+  // Wind uniforms for the fluttering flags (driven each frame via setWind()).
+  const _windUbo = { uTime: { value: 0 }, uWind: { value: 0 }, uWindDir: { value: 0 } };
+  function setWind(t, w, dir) { _windUbo.uTime.value = t; _windUbo.uWind.value = w; if (dir != null) _windUbo.uWindDir.value = dir; }
+  // Flag cloth flutter: a travelling wave along the flag, growing toward the free
+  // end, scaled by wind. Flag local: x∈[0,1] from the pole (0) to the free end (1).
+  flagMat.onBeforeCompile = (shader) => {
+    shader.uniforms.uTime = _windUbo.uTime; shader.uniforms.uWind = _windUbo.uWind;
+    shader.vertexShader = 'uniform float uTime;\nuniform float uWind;\n' + shader.vertexShader;
+    shader.vertexShader = shader.vertexShader.replace(
+      '#include <begin_vertex>',
+      `#include <begin_vertex>
+       float fEnd = position.x + 0.5;
+       transformed.z += sin(position.x * 6.0 - uTime * 6.0) * (0.04 + uWind * 0.30) * fEnd;
+       transformed.y += cos(position.x * 5.0 - uTime * 5.0) * (0.02 + uWind * 0.12) * fEnd;`,
+    );
+  };
+
   /* ------------------------------ helpers ------------------------------- */
   // Reusable scratch objects (avoid per-instance allocation).
   const _m = new T.Matrix4();
@@ -772,6 +814,57 @@ export function createHanoiItems(THREEarg) {
     return finalize(g, [body, head, hat, pole, baskets]);
   }
 
+  /* ====================================================================
+   * flags(places) — Vietnamese flag (cờ đỏ sao vàng) on a pole jutting from a
+   * façade; the cloth flutters in the wind (setWind drives it).
+   *   places: [{ x, z, ry }]   ry faces the flag out from the wall (+X local).
+   * ================================================================== */
+  function flags(places) {
+    const g = new T.Group();
+    const n = places ? places.length : 0;
+    const poleGeo = cyl(0.025, 0.025, 1.2, 5);
+    const flagGeo = G(new T.PlaneGeometry(0.9, 0.55, 10, 2));
+    const pole = imesh(poleGeo, metalDark, n, { color: false });
+    const flag = imesh(flagGeo, flagMat, n, { color: false, cast: false });
+    for (let i = 0; i < n; i++) {
+      const pl = places[i]; const x = pl.x, z = pl.z, ry = pl.ry || 0;
+      const y = 3.2 + rnd(i, 30) * 0.7;          // mount height on the façade
+      setPart(pole, i, x, z, ry, { x: 0.12, y, rz: -0.5 });      // pole tilts up-and-out
+      setPart(flag, i, x, z, ry, { x: 0.62, y: y + 0.46 });      // cloth hangs from the pole
+    }
+    return finalize(g, [pole, flag]);
+  }
+
+  /* ====================================================================
+   * kumquat(places) — a potted ornamental tree / cây cảnh: terracotta pot, a
+   * green canopy and a scatter of small orange kumquats. Instanced.
+   *   places: [{ x, z }]
+   * ================================================================== */
+  function kumquat(places) {
+    const g = new T.Group();
+    const n = places ? places.length : 0;
+    const FRUIT = 7;
+    const potGeo = cyl(0.28, 0.2, 0.4, 10);
+    const canopyGeo = sphere(0.42, 8, 6);
+    const fruitGeo = sphere(0.06, 5, 4);
+    const pot = imesh(potGeo, terracotta, n, { receive: true });
+    const canopy = imesh(canopyGeo, leaf, n, { color: true });
+    const fruit = imesh(fruitGeo, fruitOrange, n * FRUIT, { color: false });
+    for (let i = 0; i < n; i++) {
+      const pl = places[i]; const x = pl.x, z = pl.z;
+      const ry = rnd(i, 31) * Math.PI * 2;
+      const h = 0.9 + rnd(i, 32) * 0.5;
+      setPart(pot, i, x, z, ry, { y: 0.2 });
+      setPart(canopy, i, x, z, ry, { y: 0.4 + 0.5 * h, sy: h });
+      _c.setHSL((110 + rnd(i, 33) * 16) / 360, 0.5, 0.3); canopy.setColorAt(i, _c);
+      for (let k = 0; k < FRUIT; k++) {
+        const a = (k / FRUIT) * Math.PI * 2;
+        setPart(fruit, i * FRUIT + k, x, z, ry, { x: Math.cos(a) * 0.32, y: 0.5 + 0.5 * h + Math.sin(k * 1.7) * 0.14, z: Math.sin(a) * 0.32 });
+      }
+    }
+    return finalize(g, [pot, canopy, fruit]);
+  }
+
   /* ------------------------------ dispose ------------------------------- */
   /** Free EVERY geometry & material this module allocated. */
   function dispose() {
@@ -795,7 +888,10 @@ export function createHanoiItems(THREEarg) {
     lanterns,
     bicycles,
     vendors,
+    flags,
+    kumquat,
     setNightFactor,
+    setWind,
     dispose,
   };
 }
