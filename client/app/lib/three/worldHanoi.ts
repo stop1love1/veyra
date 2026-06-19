@@ -935,7 +935,7 @@ export function createVeyraWorld(container, opts) {
     }
 
     // ─────────────── STREET LIFE — Hanoi items along the roads ────────────
-    scatterItems(roadList, buildList, lakeCx, lakeCz, lakeNorthZ);
+    scatterItems(roadList, buildList, lakeCx, lakeCz, lakeNorthZ, lakeR);
 
     // ───────────────────── TREES — ~832 real positions ───────────────────
     // Every real tree position becomes ONE instance in just TWO InstancedMeshes —
@@ -944,9 +944,15 @@ export function createVeyraWorld(container, opts) {
     // variation. NO collision (trees are thin → streets stay walkable). Shadows
     // only on the high tier (and only near the core), off on mid/low for the budget.
     let treeList = (data && data.trees) ? data.trees : [];
-    // Hoan Kiem reads as a tree-LINED shore, not a forest — keep the count modest
-    // (the cap keeps the trees nearest the lake, i.e. the real shoreline rows).
-    const treeCap = q.tier === 'low' ? 110 : q.tier === 'mid' ? 200 : 320;
+    // Hoan Kiem reads as a tree-LINED SHORE, not a forest. Keep trees in a band
+    // hugging the lake (the real perimeter rows + the boulevards that ring it);
+    // beyond that band keep only a sparse scatter so distant streets aren't bare.
+    const shoreBand = lakeR + 110;
+    treeList = treeList.filter((t) => {
+      const d = Math.hypot(t[0] - lakeCx, t[1] - lakeCz);
+      return d < shoreBand || hash01(t[0] * 0.7, t[1] * 0.7) < 0.22;
+    });
+    const treeCap = q.tier === 'low' ? 110 : q.tier === 'mid' ? 220 : 360;
     if (treeList.length > treeCap) {
       treeList = treeList
         .map((t) => ({ t, d: (t[0] - lakeCx) ** 2 + (t[1] - lakeCz) ** 2 }))
@@ -1686,11 +1692,52 @@ export function createVeyraWorld(container, opts) {
         const x = p[0] + (ux / ul) * 4.0, z = p[1] + (uz / ul) * 4.0;
         placeProp(props.streetlight(), x, z, Math.atan2(ux, uz));
         circles.push({ x, z, r: 0.4 });
-        if ((i / lampStep) % 2 === 0) {
-          const bx = p[0] + (ux / ul) * 2.5, bz = p[1] + (uz / ul) * 2.5;
-          placeProp(props.bench(), bx, bz, Math.atan2(ux, uz) + Math.PI / 2);
-          circles.push({ x: bx, z: bz, r: 0.9 });
+        // benches facing the water (more frequent now).
+        const bx = p[0] + (ux / ul) * 2.5, bz = p[1] + (uz / ul) * 2.5;
+        placeProp(props.bench(), bx, bz, Math.atan2(ux, uz) + Math.PI / 2);
+        circles.push({ x: bx, z: bz, r: 0.9 });
+      }
+
+      // ── Iconic Hoan Kiem RAILING: posts + a top rail just outside the water rim,
+      //    sampled at a fixed spacing around the real polygon (1–2 draw calls). ──
+      const railPts = [];
+      const railOff = 1.4;
+      for (let i = 0; i < n; i++) {
+        const a = lakePoly[i], b = lakePoly[(i + 1) % n];
+        const segLen = Math.hypot(b[0] - a[0], b[1] - a[1]);
+        for (let d = 0; d < segLen; d += 3.2) {
+          const tt = d / segLen;
+          const px = a[0] + (b[0] - a[0]) * tt, pz = a[1] + (b[1] - a[1]) * tt;
+          const ux = px - lakeCx, uz = pz - lakeCz, ul = Math.hypot(ux, uz) || 1;
+          railPts.push([px + (ux / ul) * railOff, pz + (uz / ul) * railOff]);
         }
+      }
+      if (railPts.length >= 2) {
+        const railMat = new THREE.MeshStandardMaterial({ color: hsl(190, 0.12, 0.5), roughness: 0.7, metalness: 0.25 });
+        localMats.push(railMat);
+        const postGeo = new THREE.BoxGeometry(0.1, 0.85, 0.1);
+        const railGeo = new THREE.BoxGeometry(1, 1, 1);
+        ownedGeoms.push(postGeo, railGeo);
+        const posts = new THREE.InstancedMesh(postGeo, railMat, railPts.length);
+        const rails = new THREE.InstancedMesh(railGeo, railMat, railPts.length);
+        posts.castShadow = false; rails.castShadow = false;
+        const m = new THREE.Matrix4(), p = new THREE.Vector3(), qx = new THREE.Quaternion(), sc = new THREE.Vector3();
+        const xAxis = new THREE.Vector3(1, 0, 0), dir = new THREE.Vector3();
+        const ZERO = new THREE.Matrix4().makeScale(0, 0, 0);
+        for (let i = 0; i < railPts.length; i++) {
+          p.set(railPts[i][0], 0.42, railPts[i][1]); m.compose(p, new THREE.Quaternion(), new THREE.Vector3(1, 1, 1));
+          posts.setMatrixAt(i, m);
+          const nxt = railPts[(i + 1) % railPts.length];
+          const dx = nxt[0] - railPts[i][0], dz = nxt[1] - railPts[i][1];
+          const len = Math.hypot(dx, dz);
+          if (len > 6 || len < 0.01) { rails.setMatrixAt(i, ZERO); continue; }  // skip the wrap-around gap
+          dir.set(dx, 0, dz).normalize(); qx.setFromUnitVectors(xAxis, dir);
+          p.set((railPts[i][0] + nxt[0]) / 2, 0.78, (railPts[i][1] + nxt[1]) / 2); sc.set(len, 0.06, 0.06);
+          m.compose(p, qx, sc); rails.setMatrixAt(i, m);
+        }
+        posts.instanceMatrix.needsUpdate = true; rails.instanceMatrix.needsUpdate = true;
+        posts.matrixAutoUpdate = false; posts.updateMatrix(); rails.matrixAutoUpdate = false; rails.updateMatrix();
+        scene.add(posts); scene.add(rails); ownedInstanced.push(posts, rails);
       }
     } else {
       const lampN = Math.max(8, Math.round(16 * density));
@@ -1708,7 +1755,11 @@ export function createVeyraWorld(container, opts) {
   // placements for the instanced item builders (motorbikes, people, lamps,
   // poles+wires, awnings, signs, planters, stalls, cafés). Everything uses the
   // deterministic hash01 helper so the result is stable across rebuilds.
-  function scatterItems(roadList, buildList, lakeCx, lakeCz, lakeNorthZ) {
+  function scatterItems(roadList, buildList, lakeCx, lakeCz, lakeNorthZ, lakeR) {
+    // Street food / cafés / vendors cluster AROUND the lake (the real Old-Quarter
+    // shore), not spread evenly across the whole map.
+    const lakeNearR = (lakeR || 110) + 150;
+    const nearLake = (x, z) => Math.hypot(x - lakeCx, z - lakeCz) < lakeNearR;
     const dens = q.tier === 'low' ? 0.4 : q.tier === 'mid' ? 0.7 : 1;
     const add = (g) => { if (g) { g.matrixAutoUpdate = false; g.updateMatrix(); scene.add(g); itemGroups.push(g); } };
 
@@ -1863,7 +1914,7 @@ export function createVeyraWorld(container, opts) {
 
           // VIETNAMESE FLAGS (cờ đỏ sao vàng) on building façades, ~every 26 m.
           flagAcc += STEP;
-          if (flagAcc >= 46) {
+          if (flagAcc >= 90) {
             flagAcc = 0;
             const side = hash01(px + 5.1, pz + 2.2) < 0.5 ? 1 : -1;
             const fx = px + nx * (hw + 0.3) * side, fz = pz + nz * (hw + 0.3) * side;
@@ -1896,8 +1947,8 @@ export function createVeyraWorld(container, opts) {
             const kx = px + nx * (hw + 0.4) * kside, kz = pz + nz * (hw + 0.4) * kside;
             if (!pointInBuildings(kx, kz, 0.3) && spacingOk(kx, kz, 2.0)) { kumquatP.push({ x: kx, z: kz }); spaceAdd(kx, kz); }
           }
-          // rare shoulder-pole VENDOR on a sidewalk (Task 7).
-          if (hseed > 0.965 && hseed < 0.985) {
+          // rare shoulder-pole VENDOR on a sidewalk, near the lake.
+          if (hseed > 0.965 && hseed < 0.985 && nearLake(px, pz)) {
             const vside = hash01(px + 1.1, pz - 1.1) < 0.5 ? 1 : -1;
             const vx = px + nx * (hw + 0.7) * vside, vz = pz + nz * (hw + 0.7) * vside;
             if (!pointInBuildings(vx, vz, 0.4) && spacingOk(vx, vz, 3)) { vendP.push({ x: vx, z: vz, ry: hash01(vx, vz) * Math.PI * 2 }); spaceAdd(vx, vz); }
@@ -1910,7 +1961,7 @@ export function createVeyraWorld(container, opts) {
           }
           // red propaganda BANNER on façades, ~every 60 m (băng rôn).
           bannerAcc += STEP;
-          if (bannerAcc >= 95) {
+          if (bannerAcc >= 150) {
             bannerAcc = 0;
             const side = hash01(px - 4.4, pz + 1.9) < 0.5 ? 1 : -1;
             const bnx = px + nx * (hw + 0.25) * side, bnz = pz + nz * (hw + 0.25) * side;
@@ -1945,7 +1996,7 @@ export function createVeyraWorld(container, opts) {
           if (vendAcc >= 70) {
             vendAcc = 0;
             const px = a[0] + tx * t, pz = a[1] + tz * t;
-            if (hash01(px * 0.5 + 2.7, pz * 0.5 - 5.1) < 0.6 * dens) {
+            if (hash01(px * 0.5 + 2.7, pz * 0.5 - 5.1) < 0.6 * dens && nearLake(px, pz)) {
               const stx = px + nx * (hw + 0.8), stz = pz + nz * (hw + 0.8);
               const cfx = px - nx * (hw + 1.0), cfz = pz - nz * (hw + 1.0);
               if (!pointInBuildings(stx, stz, 0.8) && spacingOk(stx, stz, 4)) { stallP.push({ x: stx, z: stz, ry: ry - Math.PI / 2 }); spaceAdd(stx, stz); }
