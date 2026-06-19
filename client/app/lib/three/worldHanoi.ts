@@ -135,6 +135,14 @@ export function createVeyraWorld(container, opts) {
       if (mp) { mp.wrapS = THREE.RepeatWrapping; mp.wrapT = THREE.RepeatWrapping; mp.repeat.set(1 / FW, 1 / FH); mp.needsUpdate = true; }
     }
   }
+  // Base window-glow per façade material so we can ramp lit windows up at night.
+  const facadeEmissiveBase = facades.materials.map((m) => (m.emissiveIntensity != null ? m.emissiveIntensity : 0.8));
+  // Ramp the city's lit windows: dim by day (~0.12×), bright by night (~1.5×).
+  function setFacadeNight(night) {
+    for (let i = 0; i < facades.materials.length; i++) {
+      facades.materials[i].emissiveIntensity = facadeEmissiveBase[i] * (0.12 + night * 1.4);
+    }
+  }
 
   // ── Hanoi-specific landmark materials (a few dedicated tints) ─────
   const redPaint = new THREE.MeshStandardMaterial({ color: 0xc0392b, roughness: 0.6, metalness: 0.0 });   // The Huc vermilion
@@ -2120,9 +2128,12 @@ export function createVeyraWorld(container, opts) {
     swayUniforms.uTime.value = t;
     swayUniforms.uWind.value = windAmt;
     swayUniforms.uWindDir.value = windDir;
-    // Night factor from real sun elevation: glow ramps up as the sun sets.
+    // Night factor from real sun elevation: street lamps, lanterns, signs AND the
+    // city's windows light up as the sun sets, dim out after sunrise.
     const sunElev = environment.getSunElevation ? environment.getSunElevation() : 1;
-    items.setNightFactor && items.setNightFactor(Math.max(0, Math.min(1, 1 - sunElev / 0.5)));
+    const night = Math.max(0, Math.min(1, 1 - sunElev / 0.5));
+    items.setNightFactor && items.setNightFactor(night);
+    setFacadeNight(night);
     if (birdMesh) {
       for (let i = 0; i < birdParams.length; i++) {
         const bp = birdParams[i];
