@@ -102,6 +102,10 @@ export function createHanoiItems(THREEarg) {
   // Terracotta pot + ripe-kumquat orange (potted ornamental trees / cây cảnh).
   const terracotta = std(hsl(18, 0.45, 0.42), 0.85, 0.0);
   const fruitOrange = std(hsl(30, 0.85, 0.5), 0.6, 0.0);
+  // Red propaganda banner cloth + its yellow band; brass-ish birdcage.
+  const bannerRed = std(hsl(0, 0.72, 0.42), 0.85, 0.0, { side: T.DoubleSide });
+  const bannerYellow = std(hsl(48, 0.85, 0.55), 0.8, 0.0, { side: T.DoubleSide });
+  const cageBrass = std(hsl(40, 0.5, 0.55), 0.5, 0.4);
 
   // ── Vietnamese flag (cờ đỏ sao vàng): red cloth + a yellow 5-point star ──
   function makeFlagTexture() {
@@ -865,6 +869,54 @@ export function createHanoiItems(THREEarg) {
     return finalize(g, [pot, canopy, fruit]);
   }
 
+  /* ====================================================================
+   * birdcages(places) — a hanging songbird cage (very Hanoi café detail): a
+   * small brass cage, domed top, a hook, and a tiny bird. Instanced.
+   *   places: [{ x, z, ry, y? }]
+   * ================================================================== */
+  function birdcages(places) {
+    const g = new T.Group();
+    const n = places ? places.length : 0;
+    const cageGeo = cyl(0.16, 0.16, 0.34, 8);
+    const domeGeo = sphere(0.16, 8, 4);
+    const hookGeo = cyl(0.012, 0.012, 0.18, 4);
+    const birdGeo = sphere(0.06, 6, 4);
+    const cage = imesh(cageGeo, cageBrass, n, { cast: false });
+    const dome = imesh(domeGeo, cageBrass, n, { cast: false });
+    const hook = imesh(hookGeo, metalDark, n, { cast: false });
+    const bird = imesh(birdGeo, rubber, n, { cast: false });
+    for (let i = 0; i < n; i++) {
+      const pl = places[i]; const x = pl.x, z = pl.z, ry = pl.ry || 0;
+      const y = pl.y != null ? pl.y : 2.6;
+      setPart(hook, i, x, z, ry, { x: 0.0, y: y + 0.27 });
+      setPart(cage, i, x, z, ry, { x: 0.0, y });
+      setPart(dome, i, x, z, ry, { x: 0.0, y: y + 0.17, sy: 0.5 });
+      setPart(bird, i, x, z, ry, { x: 0.03, y: y - 0.02 });
+    }
+    return finalize(g, [hook, cage, dome, bird]);
+  }
+
+  /* ====================================================================
+   * banners(places) — a vertical red propaganda banner (băng rôn) with a yellow
+   * band, hung flush on a façade. Instanced.
+   *   places: [{ x, z, ry }]   ry faces the banner out from the wall.
+   * ================================================================== */
+  function banners(places) {
+    const g = new T.Group();
+    const n = places ? places.length : 0;
+    const panelGeo = box(0.04, 1.6, 0.7);
+    const stripeGeo = box(0.045, 0.18, 0.72);
+    const panel = imesh(panelGeo, bannerRed, n, { cast: false });
+    const stripe = imesh(stripeGeo, bannerYellow, n, { cast: false });
+    for (let i = 0; i < n; i++) {
+      const pl = places[i]; const x = pl.x, z = pl.z, ry = pl.ry || 0;
+      const y = 2.8 + rnd(i, 40) * 0.6;
+      setPart(panel, i, x, z, ry, { x: 0.06, y });
+      setPart(stripe, i, x, z, ry, { x: 0.07, y: y + 0.32 });
+    }
+    return finalize(g, [panel, stripe]);
+  }
+
   /* ------------------------------ dispose ------------------------------- */
   /** Free EVERY geometry & material this module allocated. */
   function dispose() {
@@ -890,6 +942,8 @@ export function createHanoiItems(THREEarg) {
     vendors,
     flags,
     kumquat,
+    birdcages,
+    banners,
     setNightFactor,
     setWind,
     dispose,

@@ -1681,6 +1681,7 @@ export function createVeyraWorld(container, opts) {
 
     const lampP = [], peopleP = [], signP = [], awnP = [], planterP = [], stallP = [], cafeP = [];
     const vendP = [], flagP = [], kumquatP = [];   // shoulder-pole vendors, VN flags, potted ornamental trees
+    const birdcageP = [], bannerP = [];            // hanging birdcages, red propaganda banners
     const poleRuns = [];
 
     // ── Building lookups: reject placements that fall inside (or just inside the
@@ -1757,6 +1758,7 @@ export function createVeyraWorld(container, opts) {
       let poleAcc = 0;      // distance since last pole
       let signAcc = 0;      // distance since last awning/sign
       let flagAcc = 0;      // distance since last Vietnamese flag
+      let bannerAcc = 0;    // distance since last red banner
       let lampSide = 1;     // alternating lamp side
 
       for (let si = 0; si < pts.length - 1; si++) {
@@ -1836,6 +1838,20 @@ export function createVeyraWorld(container, opts) {
             const vx = px + nx * (hw + 0.7) * vside, vz = pz + nz * (hw + 0.7) * vside;
             if (!pointInBuildings(vx, vz, 0.4) && spacingOk(vx, vz, 3)) { vendP.push({ x: vx, z: vz, ry: hash01(vx, vz) * Math.PI * 2 }); spaceAdd(vx, vz); }
           }
+          // rare hanging BIRDCAGE on a café-ish façade (lồng chim).
+          if (hseed > 0.95 && hseed < 0.962) {
+            const cside = hash01(px + 3.7, pz - 1.3) < 0.5 ? 1 : -1;
+            const cgx = px + nx * (hw + 0.3) * cside, cgz = pz + nz * (hw + 0.3) * cside;
+            if (facadeWithin(cgx, cgz, 3.2)) birdcageP.push({ x: cgx, z: cgz, ry: ry + (Math.PI / 2) * cside });
+          }
+          // red propaganda BANNER on façades, ~every 60 m (băng rôn).
+          bannerAcc += STEP;
+          if (bannerAcc >= 60) {
+            bannerAcc = 0;
+            const side = hash01(px - 4.4, pz + 1.9) < 0.5 ? 1 : -1;
+            const bnx = px + nx * (hw + 0.25) * side, bnz = pz + nz * (hw + 0.25) * side;
+            if (facadeWithin(bnx, bnz, 3.0)) bannerP.push({ x: bnx, z: bnz, ry: ry + (Math.PI / 2) * side });
+          }
 
           t += STEP;
         }
@@ -1902,6 +1918,10 @@ export function createVeyraWorld(container, opts) {
     if (flagP.length > flagCap) flagP.length = flagCap;
     const kumquatCap = q.tier === 'low' ? 60 : q.tier === 'mid' ? 160 : 300;
     if (kumquatP.length > kumquatCap) kumquatP.length = kumquatCap;
+    const birdcageCap = q.tier === 'low' ? 30 : q.tier === 'mid' ? 90 : 160;
+    if (birdcageP.length > birdcageCap) birdcageP.length = birdcageCap;
+    const bannerCap = q.tier === 'low' ? 40 : q.tier === 'mid' ? 120 : 220;
+    if (bannerP.length > bannerCap) bannerP.length = bannerCap;
 
     // Furniture collision (so the player can't walk THROUGH solid items). Pushed
     // here; the spatial grid is built once at the end of build() after these.
@@ -1926,6 +1946,8 @@ export function createVeyraWorld(container, opts) {
     add(items.vendors(vendP));
     add(items.flags(flagP));
     add(items.kumquat(kumquatP));
+    add(items.birdcages(birdcageP));
+    add(items.banners(bannerP));
   }
 
   // Find a road vertex near the lake's north shore to spawn on (real street).
