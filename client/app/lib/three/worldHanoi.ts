@@ -33,6 +33,7 @@ import { hsl } from './shared/helpers';
 import { createKitLoader } from './shared/assets';
 import { createTextureLoader } from './shared/textures';
 import { buildAvatar } from './shared/avatar';
+import { createAvatar } from './shared/avatarFactory';
 import { createKeyboard, createJoystick } from './shared/controls';
 import { disposeScene } from './shared/dispose';
 import { detectQuality, applyQualityToRenderer } from './shared/quality';
@@ -530,7 +531,7 @@ export function createVeyraWorld(container, opts) {
   let disposed = false;
   let ready = false;
   let raf = 0, running = true;
-  let player = null, parts = null, blob = null;
+  let player = null, blob = null;   // player.parts is read directly (GLB swap-safe)
   let SPAWN = new THREE.Vector3(0, 0, -300);   // overwritten once the lake is known
   let spawnYaw = 0;                            // facing-the-lake rotation at spawn
   let MAXR = 520;                              // player clamp radius (extentR + margin)
@@ -1495,7 +1496,11 @@ export function createVeyraWorld(container, opts) {
 
     // ───────────────────────────── Player ────────────────────────────────
     // Spawn on a road by the lake's north shore, facing the lake/Turtle Tower.
-    player = buildAvatar({ hue: playerHue, style: opts.playerStyle, age: opts.playerAge });
+    // Ready Player Me rigged GLB when an avatar URL is configured/known, else the
+    // procedural avatar (graceful, no 404 noise). The factory streams the GLB in and
+    // falls back to procedural on any load error so the player is never invisible.
+    const DEFAULT_RPM_URL = opts.playerAvatarUrl || (typeof process !== 'undefined' && process.env && process.env.NEXT_PUBLIC_RPM_AVATAR_URL) || '';
+    player = createAvatar({ url: DEFAULT_RPM_URL, hue: playerHue, style: opts.playerStyle, age: opts.playerAge });
     // Restore the last saved world position if we have one (works for both
     // signed-in players and guests who walked around / cleared a gate). Falls
     // back to a sensible spawn when there's nothing saved yet.
@@ -1520,7 +1525,6 @@ export function createVeyraWorld(container, opts) {
     player.group.position.copy(SPAWN);
     player.group.rotation.y = spawnYaw;
     scene.add(player.group);
-    parts = player.parts;
     // Guests look INWARD at the built city (the gate is between them and it);
     // signed-in players keep the lake-facing framing.
     camYaw = entered ? spawnYaw : Math.PI;
@@ -3742,8 +3746,12 @@ export function createVeyraWorld(container, opts) {
     }
 
     const emoting = player.isEmoting && player.isEmoting();
-    if (sitting) {
-      applySitPose(parts, player.group, true);
+    // GLB avatars pose themselves from update(state); only the procedural avatar is
+    // posed via its `parts` bones here.
+    if (player.kind === 'glb') {
+      /* skeletal pose handled in player.update() below */
+    } else if (sitting) {
+      applySitPose(player.parts, player.group, true);
     } else {
       // Walk cadence + swing scale by age (young = quicker/bigger, old = slower).
       const g8 = player.gait || { stepRate: 1, swingAmt: 1 };
@@ -3751,16 +3759,16 @@ export function createVeyraWorld(container, opts) {
       phase += dt * (6 + sp * 4) * (moving ? 1 : 0) * g8.stepRate;
       const swing = moving ? 0.7 * sp * g8.swingAmt : 0;
       const ease = (p, v) => p.rotation.x += (v - p.rotation.x) * Math.min(1, dt * 14);
-      ease(parts.legL, Math.sin(phase) * swing);
-      ease(parts.legR, -Math.sin(phase) * swing);
+      ease(player.parts.legL, Math.sin(phase) * swing);
+      ease(player.parts.legR, -Math.sin(phase) * swing);
       // While an emote plays the avatar drives its own arms — don't fight it here.
-      if (!emoting) { ease(parts.armL, -Math.sin(phase) * swing * 0.7); ease(parts.armR, Math.sin(phase) * swing * 0.7); }
-      parts.torso.position.y = 1.05 + (moving ? Math.abs(Math.sin(phase)) * 0.04 : 0);
+      if (!emoting) { ease(player.parts.armL, -Math.sin(phase) * swing * 0.7); ease(player.parts.armR, Math.sin(phase) * swing * 0.7); }
+      player.parts.torso.position.y = 1.05 + (moving ? Math.abs(Math.sin(phase)) * 0.04 : 0);
     }
     // Face layer (blink / idle look / expression / emote), AFTER the base pose so
     // it composites on top. Wide-eyed surprise mid-jump; neutral when grounded.
     if (!sitting && !emoting) player.setExpression(pp.y <= baseY + 0.05 ? 'neutral' : 'surprised');
-    player.update(dt, { moving, grounded: pp.y <= baseY + 0.05 });
+    player.update(dt, { moving, grounded: pp.y <= baseY + 0.05, sitting });
     blob.position.set(pp.x, pp.y + 0.05, pp.z);
 
     // Frame-rate-independent damping helper.
