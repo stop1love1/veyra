@@ -47,6 +47,13 @@ export class VouchersController {
 export class MeVouchersController {
   constructor(private readonly vouchersService: VouchersService) {}
 
+  // GET /me/vouchers — vouchers the caller owns (earned/redeemed).
+  @Get()
+  @Roles(Role.User)
+  mine(@CurrentUser() user: AuthUser) {
+    return this.vouchersService.listMine(user.userId);
+  }
+
   // POST /me/vouchers/:code/redeem — any authenticated user.
   @Post(':code/redeem')
   @Roles(Role.User)

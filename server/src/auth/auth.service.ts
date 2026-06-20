@@ -28,6 +28,9 @@ export interface PublicUser {
   name: string;
   role: Role;
   coins: number;
+  renown: number;
+  streakCount: number;
+  streakBest: number;
 }
 
 @Injectable()
@@ -153,6 +156,9 @@ export class AuthService {
       name: user.name,
       role: user.role,
       coins: user.coins,
+      renown: user.renown ?? 0,
+      streakCount: user.streakCount ?? 0,
+      streakBest: user.streakBest ?? 0,
     };
   }
 }

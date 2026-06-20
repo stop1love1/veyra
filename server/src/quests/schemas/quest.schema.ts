@@ -24,6 +24,10 @@ export class QuestReward {
   @Prop({ type: Number, required: false })
   coins?: number;
 
+  // Renown granted on claim. Story rewards are not daily-capped.
+  @Prop({ type: Number, required: false })
+  renown?: number;
+
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Voucher', required: false })
   voucherId?: Types.ObjectId;
 }
@@ -45,6 +49,23 @@ export class Quest {
 
   @Prop({ type: QuestRewardSchema, default: () => ({}) })
   reward: QuestReward;
+
+  // Which Renown source advances this quest (e.g. 'explore', 'purchase').
+  // A POST /me/progress event bumps every active quest sharing its source.
+  @Prop({ type: String, default: '', index: true })
+  source: string;
+
+  // Story chapter: 0 = daily/repeatable, 1..4 = the four district chapters.
+  @Prop({ type: Number, default: 0 })
+  chapter: number;
+
+  // Daily/repeatable flag (UI grouping; claim semantics unchanged).
+  @Prop({ type: Boolean, default: false })
+  daily: boolean;
+
+  // Coming-soon placeholder (e.g. real-world QR) — visible but not claimable.
+  @Prop({ type: Boolean, default: false })
+  locked: boolean;
 
   @Prop({ type: Boolean, default: true })
   active: boolean;

@@ -13,6 +13,7 @@ import { MapsModule } from './maps/maps.module';
 import { NpcsModule } from './npcs/npcs.module';
 import { OrdersModule } from './orders/orders.module';
 import { ProductsModule } from './products/products.module';
+import { ProgressionModule } from './progression/progression.module';
 import { QuestsModule } from './quests/quests.module';
 import { RealtimeModule } from './realtime/realtime.module';
 import { ShopsModule } from './shops/shops.module';
@@ -43,6 +44,7 @@ import { VouchersModule } from './vouchers/vouchers.module';
     CartModule,
     OrdersModule,
     QuestsModule,
+    ProgressionModule,
     VouchersModule,
     RealtimeModule,
   ],

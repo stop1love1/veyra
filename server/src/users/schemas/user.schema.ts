@@ -79,6 +79,30 @@ export class User {
   @Prop({ type: Number, default: 1280 })
   coins: number;
 
+  // Permanent reputation that drives the rank ladder (see progression module).
+  // Never decreases; spending coins never affects it.
+  @Prop({ type: Number, default: 0, index: true })
+  renown: number;
+
+  // Daily Renown-cap bookkeeping: `renownDay` is the local YYYY-MM-DD the
+  // counters apply to; `renownToday` maps source → events counted that day.
+  @Prop({ type: String, default: '' })
+  renownDay: string;
+
+  @Prop({ type: Object, default: {} })
+  renownToday: Record<string, number>;
+
+  // Daily check-in streak: current consecutive days, the last check-in day
+  // (YYYY-MM-DD, server local), and the best streak ever reached.
+  @Prop({ type: Number, default: 0 })
+  streakCount: number;
+
+  @Prop({ type: String, default: '' })
+  streakLastDay: string;
+
+  @Prop({ type: Number, default: 0 })
+  streakBest: number;
+
   @Prop({ type: SellerProfileSchema, required: false })
   sellerProfile?: SellerProfile;
 

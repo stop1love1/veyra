@@ -135,11 +135,15 @@ export class QuestsService {
 
     // Grant rewards. The atomic claimed-flip above guarantees this block runs
     // at most once per (user, quest), so neither award can be duplicated.
+    // Coins and Renown are both account-level $inc; story Renown is NOT daily-
+    // capped (the cap only governs ambient action events, not claimed rewards).
     const coins = quest.reward?.coins;
-    if (coins && coins > 0) {
-      await this.userModel
-        .updateOne({ _id: uid }, { $inc: { coins } })
-        .exec();
+    const renown = quest.reward?.renown;
+    const inc: Record<string, number> = {};
+    if (coins && coins > 0) inc.coins = coins;
+    if (renown && renown > 0) inc.renown = renown;
+    if (Object.keys(inc).length > 0) {
+      await this.userModel.updateOne({ _id: uid }, { $inc: inc }).exec();
     }
 
     // Grant the voucher reward if the quest defines one. Idempotent against the

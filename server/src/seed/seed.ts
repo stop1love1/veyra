@@ -38,6 +38,8 @@ import {
 } from '../maps/schemas/map-instance.schema';
 import { Shop, ShopSchema } from '../shops/schemas/shop.schema';
 import { Npc, NpcSchema } from '../npcs/schemas/npc.schema';
+import { Quest, QuestSchema } from '../quests/schemas/quest.schema';
+import { Voucher, VoucherSchema } from '../vouchers/schemas/voucher.schema';
 
 // ── Config ──────────────────────────────────────────────────────────────────
 
@@ -207,6 +209,11 @@ async function seed(): Promise<void> {
   );
   const Shops: Model<Shop> = mongoose.model<Shop>(Shop.name, ShopSchema);
   const Npcs: Model<Npc> = mongoose.model<Npc>(Npc.name, NpcSchema);
+  const Vouchers: Model<Voucher> = mongoose.model<Voucher>(
+    Voucher.name,
+    VoucherSchema,
+  );
+  const Quests: Model<Quest> = mongoose.model<Quest>(Quest.name, QuestSchema);
 
   // ── 1. Users (upsert by email) ────────────────────────────────────────────
   async function upsertUser(
@@ -513,6 +520,87 @@ async function seed(): Promise<void> {
   ).exec();
 
   console.log(`[seed] map 'veyra-central' published (${instances.length} instances)`);
+
+  // ── 4. Vouchers (upsert by code) ──────────────────────────────────────────
+  // Platform-wide reward vouchers granted by the Renown quest ladder.
+  async function upsertVoucher(
+    code: string,
+    type: 'percent' | 'amount' | 'freeship',
+    value: number,
+  ): Promise<Types.ObjectId> {
+    const doc = await Vouchers.findOneAndUpdate(
+      { code },
+      { $set: { type, value }, $setOnInsert: { code, uses: 0 } },
+      { upsert: true, new: true, setDefaultsOnInsert: true },
+    ).exec();
+    return doc._id as Types.ObjectId;
+  }
+  const voucherIdByCode = new Map<string, Types.ObjectId>([
+    ['WELCOME10', await upsertVoucher('WELCOME10', 'percent', 10)],
+    ['VEYRA50', await upsertVoucher('VEYRA50', 'amount', 50000)],
+    ['FREESHIP', await upsertVoucher('FREESHIP', 'freeship', 0)],
+    // Day-7 daily-streak milestone reward.
+    ['STREAK7', await upsertVoucher('STREAK7', 'percent', 15)],
+  ]);
+  console.log(`[seed] vouchers ok (${voucherIdByCode.size})`);
+
+  // ── 5. Quests (upsert by key) — the Renown story ladder ───────────────────
+  interface QuestSpec {
+    key: string;
+    title: I18nType;
+    source: string;
+    goal: number;
+    chapter: number;
+    renown: number;
+    coins?: number;
+    voucher?: string;
+    daily?: boolean;
+    locked?: boolean;
+  }
+  const questSpecs: QuestSpec[] = [
+    // Chapter 0 — daily
+    { key: 'd-checkin', chapter: 0, daily: true, source: 'daily', goal: 1, renown: 10, coins: 20, title: i18n('Điểm danh Veyra', 'Veyra check-in') },
+    { key: 'd-stroll', chapter: 0, daily: true, source: 'explore', goal: 1, renown: 5, title: i18n('Dạo 1 quận bất kỳ', 'Stroll a district') },
+    // Chapter 1 — Khách quen (Aria · Mira)
+    { key: 'c1-explore', chapter: 1, source: 'explore', goal: 3, renown: 30, coins: 50, title: i18n('Khám phá 3 cửa hàng', 'Explore 3 shops') },
+    { key: 'c1-stylist', chapter: 1, source: 'stylist', goal: 1, renown: 30, voucher: 'WELCOME10', title: i18n('Trò chuyện cùng stylist Mira', 'Chat with stylist Mira') },
+    { key: 'c1-curate', chapter: 1, source: 'curate', goal: 3, renown: 20, coins: 30, title: i18n('Lưu 3 món vào yêu thích', 'Save 3 favorites') },
+    // Chapter 2 — Cư dân (Lumen · Noa)
+    { key: 'c2-stylist', chapter: 2, source: 'stylist', goal: 1, renown: 30, coins: 50, title: i18n('Soi da & tư vấn cùng Noa', 'Skin scan with Noa') },
+    { key: 'c2-buy', chapter: 2, source: 'purchase', goal: 1, renown: 60, voucher: 'FREESHIP', title: i18n('Hoàn tất đơn hàng đầu tiên', 'Complete first order') },
+    { key: 'c2-look', chapter: 2, source: 'curate', goal: 3, renown: 40, title: i18n('Phối 1 "look" hoàn chỉnh', 'Style a full look') },
+    // Chapter 3 — Người sành điệu (Nest · Theo)
+    { key: 'c3-cats', chapter: 3, source: 'purchase', goal: 2, renown: 60, coins: 80, title: i18n('Mua ở 2 danh mục khác nhau', 'Buy across 2 categories') },
+    { key: 'c3-collection', chapter: 3, source: 'curate', goal: 1, renown: 80, title: i18n('Hoàn thành 1 bộ sưu tập look', 'Complete a look collection') },
+    { key: 'c3-review', chapter: 3, source: 'curate', goal: 1, renown: 40, coins: 50, title: i18n('Đánh giá 1 sản phẩm đã mua', 'Review a purchase') },
+    // Chapter 4 — Công dân Veyra (Pulse · Vi)
+    { key: 'c4-allfour', chapter: 4, source: 'explore', goal: 4, renown: 60, coins: 100, title: i18n('Ghé đủ cả 4 quận', 'Visit all 4 districts') },
+    { key: 'c4-loyal', chapter: 4, source: 'purchase', goal: 3, renown: 120, voucher: 'VEYRA50', title: i18n('Đạt mốc chi tiêu trung thành', 'Reach loyalty spend') },
+    { key: 'c4-qr', chapter: 4, source: 'qr-scan', goal: 1, renown: 150, locked: true, title: i18n('Quét QR tại cửa hàng thật', 'Scan QR at a real store') },
+  ];
+  for (const q of questSpecs) {
+    const reward: Record<string, unknown> = { renown: q.renown };
+    if (q.coins) reward.coins = q.coins;
+    if (q.voucher) reward.voucherId = voucherIdByCode.get(q.voucher);
+    await Quests.findOneAndUpdate(
+      { key: q.key },
+      {
+        $set: {
+          title: q.title,
+          goal: { type: q.source, count: q.goal },
+          reward,
+          source: q.source,
+          chapter: q.chapter,
+          daily: !!q.daily,
+          locked: !!q.locked,
+          active: true,
+        },
+        $setOnInsert: { key: q.key },
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true },
+    ).exec();
+  }
+  console.log(`[seed] quests ok (${questSpecs.length})`);
 
   // ── Summary ───────────────────────────────────────────────────────────────
   console.log('────────────────────────────────────────────');

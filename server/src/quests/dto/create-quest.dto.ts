@@ -33,6 +33,11 @@ export class QuestRewardDto {
   coins?: number;
 
   @IsOptional()
+  @IsInt()
+  @Min(0)
+  renown?: number;
+
+  @IsOptional()
   @IsMongoId()
   voucherId?: string;
 }
@@ -53,6 +58,23 @@ export class CreateQuestDto {
   @ValidateNested()
   @Type(() => QuestRewardDto)
   reward?: QuestRewardDto;
+
+  @IsOptional()
+  @IsString()
+  source?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  chapter?: number;
+
+  @IsOptional()
+  @IsBoolean()
+  daily?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  locked?: boolean;
 
   @IsOptional()
   @IsBoolean()

@@ -47,6 +47,19 @@ export class VouchersService {
     return this.voucherModel.find(filter).sort({ createdAt: -1 }).exec();
   }
 
+  /**
+   * Vouchers the user owns (earned via quest/rank milestones or redeemed),
+   * joined with their definitions. Used by the passport + checkout to show and
+   * apply only unlocked vouchers.
+   */
+  async listMine(userId: string): Promise<VoucherDocument[]> {
+    const uid = new Types.ObjectId(userId);
+    const owned = await this.userVoucherModel.find({ userId: uid }).exec();
+    if (owned.length === 0) return [];
+    const ids = owned.map((uv) => uv.voucherId);
+    return this.voucherModel.find({ _id: { $in: ids } }).exec();
+  }
+
   async create(data: VoucherWrite): Promise<VoucherDocument> {
     this.assertValidValue(data.type, data.value);
 
