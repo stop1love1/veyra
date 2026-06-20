@@ -846,12 +846,15 @@ export function createVeyraWorld(container, opts) {
     });
 
     let buildList = (data && data.buildings) ? data.buildings : [];
-    // Drop any OSM building whose centroid falls inside a reserved landmark plot.
+    // Drop any OSM building whose FOOTPRINT reaches a reserved landmark plot
+    // (centroid distance minus the building's own radius), so no real building
+    // can poke an edge into a landmark.
     buildList = buildList.filter((b) => {
       if (!b.poly || b.poly.length < 3) return true;
       let x = 0, z = 0; for (const p of b.poly) { x += p[0]; z += p[1]; }
       x /= b.poly.length; z /= b.poly.length;
-      return !landmarkSites.some((s) => Math.hypot(x - s.cx, z - s.cz) < s.clearR);
+      let br = 0; for (const p of b.poly) br = Math.max(br, Math.hypot(p[0] - x, p[1] - z));
+      return !landmarkSites.some((s) => Math.hypot(x - s.cx, z - s.cz) < s.clearR + br);
     });
     // LOW tier: cap to the ~350 buildings nearest the lake centre (keep the core).
     if (q.tier === 'low' && buildList.length > 350) {
