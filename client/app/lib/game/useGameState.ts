@@ -105,7 +105,17 @@ export function useGameState(): GameState {
   // the stack synchronously and keep all setState calls out of any updater.
   const histRef = React.useRef<{ screen: ScreenName; params: ScreenParams }[]>([]);
   const [cart, setCart] = React.useState<CartLine[]>(saved.cart || []);
-  const [coins, setCoins] = React.useState<number>(saved.coins != null ? saved.coins : 1280);
+  // Coins are ACCOUNT-driven: when signed in, the HUD reflects the account's
+  // server balance (seeded here from the cached user, refreshed from /auth/me on
+  // mount, and adopted on explicit login/register). Guests fall back to the
+  // locally-saved balance, else a starter default. (Coins earned in-session are
+  // not yet written back to the server — there is no coins write endpoint — so
+  // they reset to the account balance on reload.)
+  const [coins, setCoins] = React.useState<number>(() => {
+    const cached = readUser();
+    if (cached && typeof cached.coins === 'number') return cached.coins;
+    return saved.coins != null ? saved.coins : 1280;
+  });
   const [favorites, setFavorites] = React.useState<string[]>(saved.favorites || []);
   const [claimedQuests, setClaimedQuests] = React.useState<string[]>(saved.claimedQuests || []);
   const [usedVoucher, setUsedVoucher] = React.useState<string | null>(saved.usedVoucher ?? null);
@@ -277,6 +287,7 @@ export function useGameState(): GameState {
       setAuthUser(u);
       setAuthToken(readToken());
       persistUser(u);
+      if (u && typeof u.coins === 'number') setCoins(u.coins);  // adopt account balance
       flashMsg(t('authWelcome'));
       return true;
     } catch {
@@ -293,6 +304,7 @@ export function useGameState(): GameState {
         setAuthUser(u);
         setAuthToken(readToken());
         persistUser(u);
+        if (u && typeof u.coins === 'number') setCoins(u.coins);  // adopt account balance
         flashMsg(t('authWelcome'));
         return true;
       } catch {
@@ -327,6 +339,7 @@ export function useGameState(): GameState {
       setAuthUser(u);
       setAuthToken(readToken());
       persistUser(u);
+      if (u && typeof u.coins === 'number') setCoins(u.coins);  // account balance is source of truth
     } catch {
       /* offline — keep the cached user so seller affordances survive */
     }
