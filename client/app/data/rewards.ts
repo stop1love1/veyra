@@ -1,16 +1,8 @@
 // Quests and vouchers.
-import type { Quest, Voucher } from './types';
+import type { Voucher } from './types';
 
-export const QUESTS: Quest[] = [
-  { id: 'q1', reward: { vi: '+50 xu', en: '+50 coins' }, prog: 1, goal: 3,
-    title: { vi: 'Khám phá 3 cửa hàng', en: 'Explore 3 shops' } },
-  { id: 'q2', reward: { vi: 'Voucher 10%', en: '10% voucher' }, prog: 0, goal: 1,
-    title: { vi: 'Trò chuyện cùng stylist', en: 'Chat with a stylist' } },
-  { id: 'q3', reward: { vi: 'Miễn phí ship', en: 'Free shipping' }, prog: 0, goal: 1,
-    title: { vi: 'Hoàn tất đơn đầu tiên', en: 'Complete first order' } },
-  { id: 'q4', reward: { vi: '+20 xu', en: '+20 coins' }, prog: 1, goal: 1, daily: true,
-    title: { vi: 'Điểm danh hằng ngày', en: 'Daily check-in' } },
-];
+// Quest ladder now lives in quests.ts (story-aware: source/renown/chapter).
+export { QUESTS } from './quests';
 
 export const VOUCHERS: Voucher[] = [
   { id: 'WELCOME10', off: 0.1,    label: { vi: 'Giảm 10%', en: '10% off' },  note: { vi: 'Tối đa 50k', en: 'Up to 50k' } },

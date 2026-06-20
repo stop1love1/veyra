@@ -1,4 +1,5 @@
 // Domain types for Veyra content.
+import type { RenownSource } from '../lib/game/renown';
 
 export type Lang = 'vi' | 'en';
 
@@ -57,10 +58,16 @@ export interface Product {
 export interface Quest {
   id: string;
   reward: Localized;
-  prog: number;
+  prog: number;            // baseline seed; live progress lives in game state
   goal: number;
   daily?: boolean;
   title: Localized;
+  source: RenownSource;    // which Renown source this quest feeds
+  renown: number;          // Renown awarded on claim
+  chapter: number;         // 0 = daily/repeatable, 1..4 = story chapter
+  repeatable?: boolean;
+  rewardId?: string;       // voucher id granted into earnedRewards on claim
+  locked?: boolean;        // coming-soon placeholder (e.g. real-world QR)
 }
 
 export interface Voucher {
