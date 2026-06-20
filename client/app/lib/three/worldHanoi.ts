@@ -430,13 +430,20 @@ export function createVeyraWorld(container, opts) {
   // of sky ambient so the leaves always read as living green — never the pure-black
   // silhouettes they collapsed to at dawn/dusk/night when direct sun is ~0.
   function makeLeafMaterial(tex) {
-    const mat = new THREE.MeshStandardMaterial({
+    // MeshPhysicalMaterial (not Standard) so we can zero `specularIntensity`. Standard
+    // hardcodes specularF90 = 1.0, i.e. FULL grazing-angle Fresnel — so a flat leaf card
+    // seen edge-on always mirrors the bright sky and reads as a glassy pane ("bóng kính"),
+    // no matter how high roughness is. specularIntensity:0 sets both F0 and F90 to 0,
+    // killing the whole specular lobe (direct sun, IBL sky reflection, and grazing Fresnel)
+    // while keeping the diffuse green + emissive self-light + soft diffuse sky ambient.
+    const mat = new THREE.MeshPhysicalMaterial({
       map: tex, color: 0xffffff, roughness: 1.0, metalness: 0,
+      specularIntensity: 0,                       // no specular → matte foliage, never a glass pane
       alphaTest: 0.5, side: THREE.DoubleSide,    // alphaTest (not transparent) → no sort issues
       transparent: false, depthWrite: true,
       emissiveMap: tex, emissive: new THREE.Color(0xffffff), emissiveIntensity: 0.28,
     });
-    mat.envMapIntensity = 0.35;                   // gentle diffuse sky ambient (matte → no sheen)
+    mat.envMapIntensity = 0.35;                   // gentle diffuse sky ambient (specular is off → no sheen)
     localMats.push(mat);
     mat.onBeforeCompile = (shader) => {
       shader.uniforms.uTime = swayUniforms.uTime;
@@ -485,7 +492,14 @@ export function createVeyraWorld(container, opts) {
     let acc = 0; for (const s of SPECIES) { s._c0 = acc; acc += s.weight; s._c1 = acc; }
 
     // Assign every real tree to a species (seeded by position) + count per species.
-    const cardGeo = new THREE.PlaneGeometry(1, 1); ownedGeoms.push(cardGeo);
+    // CROSSED card geometry: two perpendicular quads merged into one (an "X" seen from
+    // above). A single flat quad shows a see-through gap edge-on — the "glass pane" look;
+    // crossing means there's always a quad facing the viewer, so a fan of these reads as a
+    // solid leafy volume from any angle without any opaque core ball.
+    const cardP1 = new THREE.PlaneGeometry(1, 1);
+    const cardP2 = new THREE.PlaneGeometry(1, 1).rotateY(Math.PI / 2);
+    const cardGeo = mergeGeometries([cardP1, cardP2], false); ownedGeoms.push(cardGeo);
+    cardP1.dispose(); cardP2.dispose();
     const assign = new Array(treeList.length);
     for (const s of SPECIES) s._n = 0;
     for (let i = 0; i < treeList.length; i++) {
@@ -796,6 +810,10 @@ export function createVeyraWorld(container, opts) {
     // area-weighted centroid + a representative radius so the landmarks and the
     // shore promenade can be sized/placed to the true lake.
     let lakeCx = 0, lakeCz = -20, lakeR = 110, lakeNorthZ = -300;
+    // Real OSM centroid of Tháp Rùa (from data.buildings tags) so the hand-built
+    // tower sits where it truly is. (The temple + bridge stay at the original north
+    // shore — the real east-bank position is too built-up to route a working bridge.)
+    const TURTLE_POS = { x: -11.6, z: 92.7 };
     const lakePoly = (data && data.water && data.water[0]) ? data.water[0] : null;
 
     if (lakePoly && lakePoly.length >= 3) {
@@ -893,6 +911,8 @@ export function createVeyraWorld(container, opts) {
           const z = p[1] + (nx[1] - p[1]) * t;
           // Leave a GAP at the bridge mouth so The Huc bridge corridor over the
           // water isn't fenced (the player can walk out to the temple island).
+          // Leave a GAP at the bridge mouth (north) so the The Huc bridge corridor
+          // over the water isn't fenced (the player can walk out to the temple island).
           if (Math.abs(x - lakeCx) < 3.0 && z > lakeNorthZ - 3 && z < lakeNorthZ + 11) continue;
           const ux = x - lakeCx, uz = z - lakeCz, ul = Math.hypot(ux, uz) || 1;
           circles.push({ x: x + (ux / ul) * 0.6, z: z + (uz / ul) * 0.6, r: fr });
@@ -1004,6 +1024,24 @@ export function createVeyraWorld(container, opts) {
       for (const p of b.poly) if (p[0] * p[0] + p[1] * p[1] > CITY_R * CITY_R) return false;
       return true;
     });
+    // Drop buildings that fall INSIDE the lake. A handful of real OSM footprints sit on
+    // the water (over-water pavilions / mis-tagged structures); built at ground level they
+    // stand FLOODED in the jade water. Skip any whose centroid is inside the lake polygon —
+    // genuine shore buildings keep their centroid on land, so they're untouched.
+    if (lakePoly && lakePoly.length >= 3) {
+      const inLake = (x, z) => {
+        let inside = false;
+        for (let a = 0, b = lakePoly.length - 1; a < lakePoly.length; b = a++) {
+          const xi = lakePoly[a][0], zi = lakePoly[a][1], xj = lakePoly[b][0], zj = lakePoly[b][1];
+          if (((zi > z) !== (zj > z)) && (x < (xj - xi) * (z - zi) / (zj - zi) + xi)) inside = !inside;
+        }
+        return inside;
+      };
+      buildList = buildList.filter((b) => {
+        let x = 0, z = 0; for (const p of b.poly) { x += p[0]; z += p[1]; }
+        return !inLake(x / b.poly.length, z / b.poly.length);
+      });
+    }
     // LOW tier: cap to the ~350 buildings nearest the lake centre (keep the core).
     if (q.tier === 'low' && buildList.length > 350) {
       buildList = buildList
@@ -1252,8 +1290,25 @@ export function createVeyraWorld(container, opts) {
     // builder (detailing, puddles, props, signage, spawn) stays within the fence.
     const roadListFull = (data && data.roads) ? data.roads : [];
     const roadSplit = splitRoadsByFence(roadListFull, fenceR);
-    const roadList = roadSplit.inside;
-    const outsideRoadList = roadSplit.outside;
+    let roadList = roadSplit.inside;
+    let outsideRoadList = roadSplit.outside;
+    // Remove footways that run OVER the lake (the OSM Thê Húc path is drawn as a grey
+    // paved ribbon out to mid-water, doubling the hand-built red bridge). Dropping the
+    // whole road — not just its paving quads — also strips its lamp posts/props/signage
+    // downstream (all of which read from roadList), so nothing is left standing on water.
+    const inLakeSeg = (lakePoly && lakePoly.length >= 3)
+      ? (x, z) => { let s = false; for (let a = 0, b = lakePoly.length - 1; a < lakePoly.length; b = a++) { const xi = lakePoly[a][0], zi = lakePoly[a][1], xj = lakePoly[b][0], zj = lakePoly[b][1]; if (((zi > z) !== (zj > z)) && (x < (xj - xi) * (z - zi) / (zj - zi) + xi)) s = !s; } return s; }
+      : () => false;
+    const overWater = (r) => {
+      const pts = r.pts; if (!pts) return false;
+      for (let i = 0; i < pts.length; i++) {
+        if (inLakeSeg(pts[i][0], pts[i][1])) return true;
+        if (i < pts.length - 1 && inLakeSeg((pts[i][0] + pts[i + 1][0]) / 2, (pts[i][1] + pts[i + 1][1]) / 2)) return true;
+      }
+      return false;
+    };
+    roadList = roadList.filter((r) => !overWater(r));
+    outsideRoadList = outsideRoadList.filter((r) => !overWater(r));
     // Let a roaming guest reach the far edge of the real road network (then a small
     // margin), instead of the old thin fence+30 apron.
     let outsideMaxR = fenceR;
@@ -1287,6 +1342,35 @@ export function createVeyraWorld(container, opts) {
       g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
       g.setIndex(idx);
       roadGeoms.push(g);
+    }
+    // ── JUNCTION FILL (rework step 1) ────────────────────────────────────────
+    // Each street is drawn as its own ribbon, so where two streets meet, the ribbons
+    // leave a notch/gap and the carriageway reads as fragmented strips. Drop an asphalt
+    // disc at every node SHARED by ≥2 streets (= a real intersection) so the network
+    // closes into one continuous surface. Radius = the widest road meeting there.
+    // Merged into the same asphalt mesh → no extra draw call.
+    {
+      const US = 0.12;
+      const nodes = new Map();   // rounded "x_z" → { x, z, hw, deg }
+      for (const r of roadList) {
+        const pts = r.pts; if (!pts || pts.length < 2) continue;
+        const hw = (r.w && r.w > 0 ? r.w : 4) / 2;
+        for (const p of pts) {
+          const k = Math.round(p[0]) + '_' + Math.round(p[1]);
+          const n = nodes.get(k);
+          if (n) { n.hw = Math.max(n.hw, hw); n.deg++; }
+          else nodes.set(k, { x: p[0], z: p[1], hw, deg: 1 });
+        }
+      }
+      for (const n of nodes.values()) {
+        if (n.deg < 2 || n.hw < 0.8) continue;   // only true junctions; skip lone stubs/tiny paths
+        const c = new THREE.CircleGeometry(n.hw, 12).rotateX(-Math.PI / 2).translate(n.x, 0, n.z);
+        c.deleteAttribute('normal');             // match the ribbon geoms (position + uv only)
+        const pa = c.attributes.position, ua = new Float32Array(pa.count * 2);
+        for (let v = 0; v < pa.count; v++) { ua[v * 2] = pa.getX(v) * US; ua[v * 2 + 1] = pa.getZ(v) * US; }
+        c.setAttribute('uv', new THREE.Float32BufferAttribute(ua, 2));
+        roadGeoms.push(c);
+      }
     }
     if (roadGeoms.length) {
       const roadMerged = mergeGeometries(roadGeoms, false);
@@ -1466,6 +1550,63 @@ export function createVeyraWorld(container, opts) {
         }
       }
 
+      // ── JUNCTION CORNERS + CROSSWALKS (rework steps 2 & 4) ──────────────────
+      // The per-street sidewalks are cut at junctions (above), leaving dark corner
+      // gaps. Rebuild the corners: at each shared node, fan a kerb-height paving ring
+      // around the junction but leave the road MOUTHS open. Then stripe a zebra
+      // crosswalk across each WIDE incident street just past the node.
+      const jPave = [];   // RingGeometry sectors → one merged junction-paving mesh
+      {
+        const TAU = Math.PI * 2;
+        const jnodes = new Map();
+        for (const r of roadList) {
+          const pts = r.pts; if (!pts || pts.length < 2) continue;
+          const rhw = (r.w && r.w > 0 ? r.w : 4) / 2;
+          for (let i = 0; i < pts.length; i++) {
+            const p = pts[i];
+            const k = Math.round(p[0]) + '_' + Math.round(p[1]);
+            let n = jnodes.get(k);
+            if (!n) { n = { x: p[0], z: p[1], hw: rhw, deg: 0, dirs: [] }; jnodes.set(k, n); }
+            n.hw = Math.max(n.hw, rhw); n.deg++;
+            const nb = i > 0 ? pts[i - 1] : null, nf = i < pts.length - 1 ? pts[i + 1] : null;
+            if (nb) n.dirs.push({ a: Math.atan2(nb[1] - p[1], nb[0] - p[0]), hw: rhw });
+            if (nf) n.dirs.push({ a: Math.atan2(nf[1] - p[1], nf[0] - p[0]), hw: rhw });
+          }
+        }
+        const mouthAt = (n, ang) => {
+          for (const d of n.dirs) {
+            let da = ((ang - d.a + Math.PI) % TAU + TAU) % TAU - Math.PI;
+            if (Math.abs(da) < Math.atan2(d.hw, n.hw * 0.85) + 0.12) return true;
+          }
+          return false;
+        };
+        for (const n of jnodes.values()) {
+          if (n.deg < 2 || n.hw < 0.8 || inBldg(n.x, n.z)) continue;
+          // Step 2: paving ring sectors in the corners (skip the open road mouths).
+          const K = 24, ri = n.hw * 0.85, ro = n.hw + SW;
+          for (let s = 0; s < K; s++) {
+            if (mouthAt(n, ((s + 0.5) / K) * TAU)) continue;
+            const rg = new THREE.RingGeometry(ri, ro, 1, 1, (s / K) * TAU, TAU / K);
+            rg.rotateX(-Math.PI / 2); rg.translate(n.x, KERB_Y, n.z);
+            jPave.push(rg);
+          }
+          // Step 4: a zebra band across each wide incident street, just past the node.
+          for (const d of n.dirs) {
+            if (d.hw < 3) continue;
+            const tx = Math.cos(d.a), tz = Math.sin(d.a), nxw = -tz, nzw = tx;
+            const D0 = n.hw + 0.6, D1 = D0 + 2.6;
+            for (let o = -d.hw + 0.5; o <= d.hw - 0.5; o += 1.0) {
+              const x0 = n.x + tx * D0, z0 = n.z + tz * D0, x1 = n.x + tx * D1, z1 = n.z + tz * D1;
+              quad(lPos, lIdx,
+                x0 + nxw * (o - 0.25), LINE_Y, z0 + nzw * (o - 0.25),
+                x1 + nxw * (o - 0.25), LINE_Y, z1 + nzw * (o - 0.25),
+                x1 + nxw * (o + 0.25), LINE_Y, z1 + nzw * (o + 0.25),
+                x0 + nxw * (o + 0.25), LINE_Y, z0 + nzw * (o + 0.25));
+            }
+          }
+        }
+      }
+
       const mkGeo = (P, I) => {
         const g = new THREE.BufferGeometry();
         g.setAttribute('position', new THREE.Float32BufferAttribute(P, 3));
@@ -1499,6 +1640,19 @@ export function createVeyraWorld(container, opts) {
         lineMat.polygonOffset = true; lineMat.polygonOffsetFactor = -4; lineMat.polygonOffsetUnits = -4;
         localMats.push(lineMat);
         const m = new THREE.Mesh(mkGeo(lPos, lIdx), lineMat); addStatic(m);
+      }
+      // Junction corner paving (merged ring sectors) — DoubleSide so it reads from any
+      // angle, strong polygonOffset so it wins over the asphalt junction discs beneath.
+      if (jPave.length) {
+        const merged = mergeGeometries(jPave, false);
+        for (const g of jPave) g.dispose();
+        if (merged) {
+          ownedGeoms.push(merged);
+          const jm = mats.paving.clone();
+          jm.side = THREE.DoubleSide; jm.polygonOffset = true; jm.polygonOffsetFactor = -6; jm.polygonOffsetUnits = -6;
+          localMats.push(jm);
+          const mesh = new THREE.Mesh(merged, jm); mesh.receiveShadow = true; addStatic(mesh);
+        }
       }
     }
 
@@ -1553,6 +1707,20 @@ export function createVeyraWorld(container, opts) {
     let treeList = (data && data.trees) ? data.trees : [];
     // Trees are part of the 3D city only — outside the fence stays a flat map.
     treeList = treeList.filter((t) => (t[0] * t[0] + t[1] * t[1]) <= fenceR * fenceR);
+    // Drop trees that fall INSIDE the lake — real OSM trees on Jade Island spill past
+    // the small hand-built island and end up standing in open water. Same point-in-
+    // polygon test as the buildings/koi.
+    if (lakePoly && lakePoly.length >= 3) {
+      const inLake = (x, z) => {
+        let inside = false;
+        for (let a = 0, b = lakePoly.length - 1; a < lakePoly.length; b = a++) {
+          const xi = lakePoly[a][0], zi = lakePoly[a][1], xj = lakePoly[b][0], zj = lakePoly[b][1];
+          if (((zi > z) !== (zj > z)) && (x < (xj - xi) * (z - zi) / (zj - zi) + xi)) inside = !inside;
+        }
+        return inside;
+      };
+      treeList = treeList.filter((t) => !inLake(t[0], t[1]));
+    }
     const treeCap = q.tier === 'low' ? 450 : Infinity;   // hi/mid: every real tree
     if (treeList.length > treeCap) {
       treeList = treeList
@@ -1570,7 +1738,7 @@ export function createVeyraWorld(container, opts) {
     // ──────────────────────── LANDMARKS at the lake ──────────────────────
     // Scale the landmark cluster to the real lake. Turtle Tower at the lake
     // centroid; the red bridge + Ngoc Son temple toward the north shore.
-    buildTurtleTower(lakeCx, lakeCz);
+    buildTurtleTower(TURTLE_POS.x, TURTLE_POS.z);   // Tháp Rùa at its real OSM position
     buildBridgeAndTemple(lakeCx, lakeCz, lakeNorthZ);
     buildHoanKiemMonuments(lakeCx, lakeCz, lakeNorthZ, lakeR);
     buildPublicLandmarks(lakeCx, lakeCz, lakeNorthZ, lakeR);
@@ -1582,7 +1750,7 @@ export function createVeyraWorld(container, opts) {
 
     // Street wayfinding: blue "PHỐ …" name plates, "NGÕ" alley signs, a
     // directional fingerpost, and a few brand signboards along the lakeside.
-    buildStreetSignage(roadList, lakeCx, lakeCz, lakeNorthZ, lakeR);
+    buildStreetSignage(roadList, lakeCx, lakeCz, lakeNorthZ, lakeR, lakePoly);
 
     // Pulsing additive ground glow ring under each interactable marker.
     for (let i = 0; i < interactables.length; i++) {
@@ -2728,9 +2896,29 @@ export function createVeyraWorld(container, opts) {
 
   // ── STREET SIGNAGE: blue "PHỐ …" name plates, "NGÕ" alley signs, a
   //    directional fingerpost to the landmarks, and a few brand signboards. ──
-  function buildStreetSignage(roadList, lakeCx, lakeCz, northZ, lakeR) {
+  function buildStreetSignage(roadList, lakeCx, lakeCz, northZ, lakeR, lakePoly) {
     if (!roadList || !roadList.length) return;
     const TIER = q.tier;
+    // Point-in-lake (real shore polygon) + the true shore distance along a compass
+    // ray from the lake centre. lakeR is only the MEAN radius, so on the elongated
+    // lake a fixed lakeR+offset lands signs in open water on the long axis — cast to
+    // the real rim instead, and never keep a sign that still ends up over water.
+    const inLakePoly = (x, z) => {
+      if (!lakePoly || lakePoly.length < 3) return false;
+      let s = false;
+      for (let a = 0, b = lakePoly.length - 1; a < lakePoly.length; b = a++) {
+        const xi = lakePoly[a][0], zi = lakePoly[a][1], xj = lakePoly[b][0], zj = lakePoly[b][1];
+        if (((zi > z) !== (zj > z)) && (x < (xj - xi) * (z - zi) / (zj - zi) + xi)) s = !s;
+      }
+      return s;
+    };
+    // March out along (sin a, cos a) from the centre to where the ray leaves the lake.
+    const shoreDistAlong = (a) => {
+      const dx = Math.sin(a), dz = Math.cos(a);
+      let t = 2;
+      while (t < 420 && inLakePoly(lakeCx + dx * t, lakeCz + dz * t)) t += 2;
+      return t;
+    };
     // Canvas plate texture: white text + border on an enamel ground.
     function plateTex(main, sub, bg, W, H) {
       W = W || 560; H = H || 200;
@@ -2764,7 +2952,7 @@ export function createVeyraWorld(container, opts) {
       circles.push({ x, z, r: 0.25 });
       return g;
     }
-    const within = (x, z) => landmarkSites.some((s) => Math.hypot(x - s.cx, z - s.cz) < s.clearR + 2);
+    const within = (x, z) => inLakePoly(x, z) || landmarkSites.some((s) => Math.hypot(x - s.cx, z - s.cz) < s.clearR + 2);
     const placed = [];
     const farEnough = (x, z, d) => !placed.some((p) => Math.hypot(p[0] - x, p[1] - z) < d);
     const lakeEnd = (a, b) => (Math.hypot(a[0] - lakeCx, a[1] - lakeCz) <= Math.hypot(b[0] - lakeCx, b[1] - lakeCz) ? a : b);
@@ -2783,10 +2971,11 @@ export function createVeyraWorld(container, opts) {
       [Math.PI * 0.86, 'HÀNG ĐÀO'],          // N → Old Quarter
     ];
     const capPho = TIER === 'low' ? 5 : TIER === 'mid' ? 7 : LAKE_STREETS.length;
-    const Rstreet = lakeR + 4;
     for (let i = 0; i < capPho && i < LAKE_STREETS.length; i++) {
       const [a, name] = LAKE_STREETS[i];
+      const Rstreet = shoreDistAlong(a) + 4;   // real shore for THIS bearing, then a touch onto land
       const x = lakeCx + Math.sin(a) * Rstreet, z = lakeCz + Math.cos(a) * Rstreet;
+      if (inLakePoly(x, z)) continue;            // safety: never strand a plate on the water
       const ang = Math.atan2(lakeCx - x, lakeCz - z);   // face the lakeside path
       poleSign(x, z, ang, plateTex('PHỐ ' + name, 'QUẬN HOÀN KIẾM'), 2.2, 2.9);
       placed.push([x, z]);
@@ -2884,9 +3073,13 @@ export function createVeyraWorld(container, opts) {
 
   // THÁP RÙA — Turtle Tower on a small island at the lake centre.
   function buildTurtleTower(ox, oz) {
-    const g = new THREE.Group(); g.position.set(ox, 0, oz); scene.add(g);
-    const island = new THREE.Mesh(new THREE.CylinderGeometry(5.5, 6.5, 1.0, 32), mossStone);
-    island.position.y = -0.1; island.castShadow = true; island.receiveShadow = true; g.add(island);
+    // Lift the whole islet clear of the 0.18 water line: the islet used to top out at
+    // y=0.4 (only 0.22 m proud), so the 9 m tower looked like it was sinking. The group
+    // lift raises every part together; the islet cylinder is also made taller so its base
+    // stays deep below the surface (hidden) while ~1.1 m of stone now shows above water.
+    const g = new THREE.Group(); g.position.set(ox, 0.8, oz); scene.add(g);
+    const island = new THREE.Mesh(new THREE.CylinderGeometry(5.5, 7.0, 2.4, 32), mossStone);
+    island.position.y = -0.7; island.castShadow = true; island.receiveShadow = true; g.add(island);
     const grass = new THREE.Mesh(new THREE.CylinderGeometry(4.6, 5.2, 0.3, 28), mats.foliage);
     grass.position.y = 0.45; grass.receiveShadow = true; g.add(grass);
 

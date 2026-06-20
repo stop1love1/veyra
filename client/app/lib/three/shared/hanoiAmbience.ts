@@ -99,7 +99,10 @@ export function createHanoiAmbience(THREEarg, { quality } = {}) {
         // Materials: bark trunk + willow-green canopy/fronds.
         const barkMat = M(new T.MeshStandardMaterial({ color: 0x5a4632, roughness: 0.92, metalness: 0 }));
         const canopyMat = M(new T.MeshStandardMaterial({ color: 0x7d9a4c, roughness: 0.92, metalness: 0, flatShading: true }));
-        const frondMat = M(new T.MeshStandardMaterial({ color: 0x82a449, roughness: 0.94, metalness: 0, side: T.DoubleSide }));
+        // Physical (not Standard) + specularIntensity:0: the fronds are flat planes
+        // drooping over the bright jade water, so Standard's full grazing Fresnel would
+        // mirror the sky into a glassy pane. Zeroing specular keeps them matte green.
+        const frondMat = M(new T.MeshPhysicalMaterial({ color: 0x82a449, roughness: 0.94, metalness: 0, specularIntensity: 0, side: T.DoubleSide }));
         // Frond sway: displace by how far BELOW the attach point the vertex hangs, so
         // the tips swing while the top stays put. Phase varies by instance position.
         frondMat.onBeforeCompile = (sh) => {

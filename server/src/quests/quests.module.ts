@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { UsersModule } from '../users/users.module';
 import { VouchersModule } from '../vouchers/vouchers.module';
+import { ReferralModule } from '../referral/referral.module';
 import { QuestsController } from './quests.controller';
 import { QuestsService } from './quests.service';
 import { Quest, QuestSchema } from './schemas/quest.schema';
@@ -19,6 +20,8 @@ import { UserQuest, UserQuestSchema } from './schemas/user-quest.schema';
     // VouchersModule re-exports MongooseModule (UserVoucher model) so we can
     // grant a voucher reward on claim.
     VouchersModule,
+    // ReferralModule pays out a referral when a claim crosses the milestone.
+    ReferralModule,
   ],
   controllers: [QuestsController],
   providers: [QuestsService],

@@ -4,7 +4,7 @@ import { VEYRA } from '../../data';
 import { detectLite } from '../theme/detect';
 import i18n from '../i18n';
 import { api, setToken } from '../api/client';
-import type { PublicUser, ApiQuestEntry, ApiVoucher, ApiCheckinResult, ApiLeaderboard } from '../api/client';
+import type { PublicUser, ApiQuestEntry, ApiVoucher, ApiCheckinResult, ApiLeaderboard, ApiReferral } from '../api/client';
 import type {
   Game, Player, CartLine, ScreenName, ScreenParams, WorldPanel, NavSignal, NavDir, AuthState,
 } from './types';
@@ -71,6 +71,28 @@ function readToken(): string | null {
   }
 }
 
+// Pending referral code captured from a share link (?ref=CODE), held until the
+// visitor registers. Persisted so it survives the gate/create flow.
+const REF_KEY = 'veyra_ref';
+function captureRefFromUrl(): void {
+  try {
+    const code = new URLSearchParams(window.location.search).get('ref');
+    if (code) localStorage.setItem(REF_KEY, code.trim().toUpperCase());
+  } catch { /* ignore */ }
+}
+function readPendingRef(): string | undefined {
+  try {
+    return localStorage.getItem(REF_KEY) || undefined;
+  } catch {
+    return undefined;
+  }
+}
+function clearPendingRef(): void {
+  try {
+    localStorage.removeItem(REF_KEY);
+  } catch { /* ignore */ }
+}
+
 /** Versioned load with a migration guard — old/foreign shapes are dropped. */
 function loadState(): PersistedState {
   try {
@@ -132,6 +154,7 @@ export function useGameState(): GameState {
   const [earnedVouchers, setEarnedVouchers] = React.useState<ApiVoucher[]>([]);
   const [streakReward, setStreakReward] = React.useState<ApiCheckinResult | null>(null);
   const [leaderboard, setLeaderboard] = React.useState<ApiLeaderboard | null>(null);
+  const [referral, setReferral] = React.useState<ApiReferral | null>(null);
   const [npcOpen, setNpc] = React.useState<string | null>(null);
   const [prodOpen, setProd] = React.useState<string | null>(null);
   const [worldPanel, setWorldPanel] = React.useState<WorldPanel | null>(null);
@@ -295,6 +318,11 @@ export function useGameState(): GameState {
     api.getLeaderboard(20).then(setLeaderboard).catch(() => {});
   }, []);
 
+  const refreshReferral = React.useCallback(() => {
+    if (!readToken()) return;
+    api.getReferral().then(setReferral).catch(() => {});
+  }, []);
+
   const toggleFavorite = React.useCallback((id: string) => {
     const adding = !favRef.current.includes(id);
     setFavorites((f) => (adding ? [...f, id] : f.filter((x) => x !== id)));
@@ -379,7 +407,12 @@ export function useGameState(): GameState {
   const register = React.useCallback(
     async (email: string, password: string, name: string, asSeller?: boolean): Promise<boolean> => {
       try {
-        const r = await api.register({ email, password, name, role: asSeller ? 'seller' : 'user' });
+        const r = await api.register({
+          email, password, name,
+          role: asSeller ? 'seller' : 'user',
+          referralCode: readPendingRef(),
+        });
+        clearPendingRef();
         const u = r.user ?? null;
         setAuthUser(u);
         setAuthToken(readToken());
@@ -413,6 +446,7 @@ export function useGameState(): GameState {
     setQuests([]);
     setEarnedVouchers([]);
     setLeaderboard(null);
+    setReferral(null);
     // Drop the player back into the world as a guest — they respawn OUTSIDE the
     // perimeter fence (WorldScreen rebuilds the scene on logout) and must pass a
     // gate's ticket check again to re-enter.
@@ -441,7 +475,11 @@ export function useGameState(): GameState {
       /* offline — keep the cached user so seller affordances survive */
     }
     void refreshProgress();
-  }, [refreshProgress]);
+    refreshReferral();
+  }, [refreshProgress, refreshReferral]);
+
+  // Capture a referral code from the share link (?ref=CODE) on first load.
+  React.useEffect(() => { captureRefFromUrl(); }, []);
 
   // Re-hydrate the auth user once on mount when a token is present.
   React.useEffect(() => { void refresh(); }, [refresh]);
@@ -494,6 +532,7 @@ export function useGameState(): GameState {
     rankUp, dismissRankUp,
     streak, streakBest, checkin, streakReward, dismissStreakReward,
     leaderboard, refreshLeaderboard,
+    referral, refreshReferral,
     quests, refreshProgress,
     earnedRewards, earnedVouchers, hasReward,
     favorites, isFavorite, toggleFavorite,
@@ -508,11 +547,11 @@ export function useGameState(): GameState {
     lang, player, screen, params, cart, coins, npcOpen, prodOpen, worldPanel, lite,
     cartCount, cartTotal, level, levelProgress,
     renown, rank, rankUp, dismissRankUp, quests, earnedRewards, earnedVouchers,
-    streak, streakBest, streakReward, leaderboard,
+    streak, streakBest, streakReward, leaderboard, referral,
     favorites, claimedQuests, usedVoucher,
     auth, authOpen, openAuth, closeAuth,
     t, go, back, addToCart, setQty, removeItem, clearCart, addCoins,
-    recordRenown, refreshProgress, hasReward, checkin, dismissStreakReward, refreshLeaderboard,
+    recordRenown, refreshProgress, hasReward, checkin, dismissStreakReward, refreshLeaderboard, refreshReferral,
     isFavorite, toggleFavorite, claimQuest, useVoucher,
     openNPC, closeNPC, openProduct, closeProduct, openWorldPanel, closeWorldPanel, flashMsg,
   ]);

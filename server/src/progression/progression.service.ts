@@ -25,6 +25,7 @@ import {
   streakReward,
   streakOutcome,
 } from './streak.logic';
+import { ReferralService } from '../referral/referral.service';
 
 export interface ProgressResult {
   renown: number;
@@ -68,6 +69,7 @@ export class ProgressionService {
     private readonly voucherModel: Model<VoucherDocument>,
     @InjectModel(UserVoucher.name)
     private readonly userVoucherModel: Model<UserVoucherDocument>,
+    private readonly referral: ReferralService,
   ) {}
 
   /** Static config the client mirrors so nothing (ranks/caps) is hardcoded FE. */
@@ -113,6 +115,7 @@ export class ProgressionService {
         .exec();
 
       await this.bumpQuestsForSource(uid, event);
+      await this.referral.maybeAwardReferral(userId);
     }
 
     const renown = (user.renown ?? 0) + gain;
@@ -208,6 +211,8 @@ export class ProgressionService {
         }
       }
     }
+
+    await this.referral.maybeAwardReferral(userId);
 
     const renown = (user.renown ?? 0) + reward.renown;
     return {

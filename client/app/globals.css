@@ -583,6 +583,14 @@ button:focus-visible,a:focus-visible,input:focus-visible,
 .v-lb-name{flex:1;min-width:0;font-weight:600;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .v-lb-renown{color:var(--muted);font-size:11px;}
 
+/* Invite-friends block (passport) */
+.v-invite{background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:15px;display:flex;flex-direction:column;gap:10px;}
+.v-invite-sub{font-size:12.5px;color:var(--muted);line-height:1.5;}
+.v-invite-code{font-size:12px;background:var(--paper-2);border-radius:10px;padding:10px 12px;color:var(--brand-ink);word-break:break-all;}
+.v-invite-actions{display:flex;align-items:center;gap:12px;}
+.v-invite-link{color:var(--brand-ink);font-weight:700;font-size:13px;text-decoration:none;}
+.v-invite-count{color:var(--muted);font-size:11px;}
+
 /* ─── Flash toast ────────────────────────────────────────── */
 .v-flash{position:absolute;bottom:120px;left:50%;transform:translateX(-50%);z-index:80;display:flex;align-items:center;gap:7px;
   background:rgba(16,38,40,.92);color:#eafcf8;padding:11px 18px;border-radius:999px;font-size:13px;font-weight:600;

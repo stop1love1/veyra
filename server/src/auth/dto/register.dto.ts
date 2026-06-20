@@ -17,4 +17,9 @@ export class RegisterDto {
   @IsOptional()
   @IsIn(['user', 'seller'])
   role?: 'user' | 'seller';
+
+  // Optional referral code from an inviter's share link (?ref=CODE).
+  @IsOptional()
+  @IsString()
+  referralCode?: string;
 }

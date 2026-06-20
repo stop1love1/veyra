@@ -369,6 +369,24 @@ export interface Credentials {
   name?: string;
   /** Self-serve seller signup (register only). Server constrains to user|seller. */
   role?: 'user' | 'seller';
+  /** Inviter's referral code from a share link (register only). */
+  referralCode?: string;
+}
+
+// ── Referral / share ─────────────────────────────────────────────────────
+export interface ApiReferral {
+  code: string;
+  count: number;
+}
+
+export interface ApiPublicProfile {
+  name: string;
+  avatarHue: number;
+  rankName: I18nField;
+  rankIndex: number;
+  renown: number;
+  streak: number;
+  referralCount: number;
 }
 
 /** Product create/update payload — mirrors the server CreateProductDto. */
@@ -579,6 +597,16 @@ export const api = {
   /** Tastemaker leaderboard: top players by renown + the caller's position. */
   getLeaderboard(limit = 20, opts?: RequestOptions): Promise<ApiLeaderboard> {
     return http.get<ApiLeaderboard>('/leaderboard', { ...opts, query: { limit, ...(opts?.query || {}) } });
+  },
+
+  /** The caller's own referral code + successful-invite count. */
+  getReferral(opts?: RequestOptions): Promise<ApiReferral> {
+    return http.get<ApiReferral>('/me/referral', opts);
+  },
+
+  /** Public share-card data for a referral code (no auth). */
+  getPublicProfile(code: string, opts?: RequestOptions): Promise<ApiPublicProfile> {
+    return http.get<ApiPublicProfile>(`/u/${encodeURIComponent(code)}`, opts);
   },
 };
 

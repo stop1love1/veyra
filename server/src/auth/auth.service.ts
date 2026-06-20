@@ -10,6 +10,7 @@ import * as bcrypt from 'bcryptjs';
 import { Model } from 'mongoose';
 import { Role } from '../common/roles.enum';
 import { User, UserDocument } from '../users/schemas/user.schema';
+import { ReferralService } from '../referral/referral.service';
 import { RegisterDto } from './dto/register.dto';
 import { JwtPayload } from './jwt.strategy';
 
@@ -39,6 +40,7 @@ export class AuthService {
     @InjectModel(User.name) private readonly userModel: Model<UserDocument>,
     private readonly jwtService: JwtService,
     private readonly config: ConfigService,
+    private readonly referral: ReferralService,
   ) {}
 
   async register(dto: RegisterDto): Promise<AuthResult> {
@@ -49,6 +51,14 @@ export class AuthService {
     }
 
     const passwordHash = await bcrypt.hash(dto.password, 10);
+
+    // Attribute the inviter (if a valid, non-self code was supplied) and mint
+    // this account's own share code.
+    const referralCode = await this.referral.uniqueCode();
+    const referredBy = dto.referralCode
+      ? await this.referral.resolveReferrer(dto.referralCode.trim().toUpperCase())
+      : null;
+
     const user = await this.userModel.create({
       email,
       passwordHash,
@@ -56,6 +66,8 @@ export class AuthService {
       role: dto.role === 'seller' ? Role.Seller : Role.User,
       status: 'active',
       coins: 1280,
+      referralCode,
+      referredBy,
     });
 
     return this.issue(user);

@@ -3,6 +3,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule, JwtModuleOptions, JwtSignOptions } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import { UsersModule } from '../users/users.module';
+import { ReferralModule } from '../referral/referral.module';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { JwtStrategy } from './jwt.strategy';
@@ -12,6 +13,8 @@ import { JwtStrategy } from './jwt.strategy';
     PassportModule,
     // UsersModule re-exports MongooseModule (User model) + UsersService.
     UsersModule,
+    // ReferralModule provides ReferralService (code-gen + attribution).
+    ReferralModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],

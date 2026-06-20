@@ -22,8 +22,19 @@ export function PassportScreen({ g, embed }: ScreenProps) {
   const next = rank.nextThreshold;
   const [tab, setTab] = React.useState<'info' | 'board'>('info');
 
-  // Rank/renown/streak come from the account; refresh vouchers on open.
-  React.useEffect(() => { g.refreshProgress(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // Rank/renown/streak come from the account; refresh vouchers + referral on open.
+  React.useEffect(() => { g.refreshProgress(); g.refreshReferral(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const [copied, setCopied] = React.useState(false);
+  const refCode = g.referral?.code || '';
+  const refLink = refCode && typeof window !== 'undefined' ? `${window.location.origin}/u/${refCode}` : '';
+  const shareInvite = async () => {
+    if (!refLink) return;
+    const text = g.lang === 'en' ? 'Join me in Veyra!' : 'Vào Veyra cùng mình nhé!';
+    try {
+      if (navigator.share) { await navigator.share({ title: 'Veyra', text, url: refLink }); return; }
+    } catch { /* user cancelled */ }
+    try { await navigator.clipboard.writeText(refLink); setCopied(true); setTimeout(() => setCopied(false), 1600); } catch { /* ignore */ }
+  };
   // Lazy-load the leaderboard the first time its tab is opened.
   React.useEffect(() => { if (tab === 'board') g.refreshLeaderboard(); }, [tab]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -67,6 +78,23 @@ export function PassportScreen({ g, embed }: ScreenProps) {
           </div>
         ))}
       </div>
+
+      {refCode && (
+        <React.Fragment>
+          <div className="v-pp-section">{g.t('inviteFriends')}</div>
+          <div className="v-invite">
+            <div className="v-invite-sub">{g.t('inviteHint')}</div>
+            <div className="v-invite-code v-mono">{refLink || refCode}</div>
+            <div className="v-invite-actions">
+              <button className="v-quest-claim is-on" onClick={shareInvite}>
+                {copied ? g.t('copied') : g.t('share')}
+              </button>
+              <a className="v-invite-link" href={refLink || ('/u/' + refCode)} target="_blank" rel="noopener noreferrer">{g.t('myCard')}</a>
+            </div>
+            <div className="v-mono v-invite-count">{g.t('invited')}: {g.referral?.count ?? 0}</div>
+          </div>
+        </React.Fragment>
+      )}
     </React.Fragment>
   );
 

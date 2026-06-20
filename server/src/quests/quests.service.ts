@@ -17,6 +17,7 @@ import {
   UserQuest,
   UserQuestDocument,
 } from './schemas/user-quest.schema';
+import { ReferralService } from '../referral/referral.service';
 
 @Injectable()
 export class QuestsService {
@@ -32,6 +33,7 @@ export class QuestsService {
     // UserVoucher model is available because QuestsModule imports VouchersModule.
     @InjectModel(UserVoucher.name)
     private readonly userVoucherModel: Model<UserVoucherDocument>,
+    private readonly referral: ReferralService,
   ) {}
 
   // ---- Public: list quests --------------------------------------------------
@@ -144,6 +146,8 @@ export class QuestsService {
     if (renown && renown > 0) inc.renown = renown;
     if (Object.keys(inc).length > 0) {
       await this.userModel.updateOne({ _id: uid }, { $inc: inc }).exec();
+      // A renown-granting claim may push the user past the referral milestone.
+      if (inc.renown) await this.referral.maybeAwardReferral(userId);
     }
 
     // Grant the voucher reward if the quest defines one. Idempotent against the

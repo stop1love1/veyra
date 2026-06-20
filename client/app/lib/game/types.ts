@@ -2,7 +2,7 @@
 import type { Lang } from '../../data/types';
 import type { PublicUser } from '../api/client';
 import type { RankInfo, RenownSource } from './renown';
-import type { ApiQuestEntry, ApiVoucher, ApiCheckinResult, ApiLeaderboard } from '../api/client';
+import type { ApiQuestEntry, ApiVoucher, ApiCheckinResult, ApiLeaderboard, ApiReferral } from '../api/client';
 
 export type ScreenName =
   | 'gate' | 'splash' | 'create' | 'world'
@@ -110,6 +110,10 @@ export interface Game {
   /** Cached Tastemaker leaderboard (top + the caller's position). */
   leaderboard: ApiLeaderboard | null;
   refreshLeaderboard: () => void;
+
+  /** The caller's referral code + successful-invite count (null = guest). */
+  referral: ApiReferral | null;
+  refreshReferral: () => void;
 
   /** The caller's quests joined with their progress (from GET /me/quests). */
   quests: ApiQuestEntry[];

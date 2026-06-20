@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { HydratedDocument } from 'mongoose';
+import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
 import { Role } from '../../common/roles.enum';
 
 /**
@@ -102,6 +102,23 @@ export class User {
 
   @Prop({ type: Number, default: 0 })
   streakBest: number;
+
+  // Referral: each user's own share code, who referred them, whether that
+  // referral has paid out (one-time), and how many friends they've converted.
+  // No default: absent until assigned at registration, so the unique+sparse
+  // index never trips on multiple "empty" users (sparse skips missing values,
+  // but would still collide on repeated '').
+  @Prop({ type: String, required: false, unique: true, sparse: true, index: true })
+  referralCode?: string;
+
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', default: null })
+  referredBy: Types.ObjectId | null;
+
+  @Prop({ type: Boolean, default: false })
+  referralRewarded: boolean;
+
+  @Prop({ type: Number, default: 0 })
+  referralCount: number;
 
   @Prop({ type: SellerProfileSchema, required: false })
   sellerProfile?: SellerProfile;

@@ -14,6 +14,7 @@ import { NpcsModule } from './npcs/npcs.module';
 import { OrdersModule } from './orders/orders.module';
 import { ProductsModule } from './products/products.module';
 import { ProgressionModule } from './progression/progression.module';
+import { ReferralModule } from './referral/referral.module';
 import { QuestsModule } from './quests/quests.module';
 import { RealtimeModule } from './realtime/realtime.module';
 import { ShopsModule } from './shops/shops.module';
@@ -45,6 +46,7 @@ import { VouchersModule } from './vouchers/vouchers.module';
     OrdersModule,
     QuestsModule,
     ProgressionModule,
+    ReferralModule,
     VouchersModule,
     RealtimeModule,
   ],
