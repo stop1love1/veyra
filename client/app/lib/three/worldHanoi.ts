@@ -545,6 +545,15 @@ export function createVeyraWorld(container, opts) {
   const waterWindShift = new THREE.Vector2(0, 0); // accumulated downwind drift of the ripples
   let birdMesh = null;         // instanced bird flock (built in build())
   const birdParams = [];       // per-bird orbit params
+  // Wet-weather state: materials that gain a wet sheen in rain (roofs + façades),
+  // scattered reflective puddles on the roads, and the last-applied wetness (throttle).
+  const wetMats = [];          // [{ m, r0, e0 }] base roughness/envMapIntensity
+  let puddles = null, puddleMat = null;
+  let lastWet = -1;
+  // Dev weather override (press 'r' to cycle): -1 = real Open-Meteo, else an index
+  // into FORCE_WX (clear / light rain / heavy rain) so the rain can be tested anytime.
+  let forceWx = -1;
+  const FORCE_WX = [{ o: 0, r: 0 }, { o: 0.55, r: 0.5 }, { o: 0.9, r: 1.0 }];
   const charMixers = [];       // AnimationMixers for the animated hero NPCs
   const charRoots = [];        // their root Object3Ds (cleaned up on dispose)
   // Ambient people INSIDE the city (procedural crowd + animated hero NPCs) are
@@ -825,6 +834,11 @@ export function createVeyraWorld(container, opts) {
     // tube-houses get one of these instead of a flat cap; the rest stay flat.
     const roofTileMat = new THREE.MeshStandardMaterial({ color: hsl(17, 0.55, 0.37), roughness: 0.82, metalness: 0 });
     localMats.push(roofTileMat);
+    // These (and every façade material) gain a wet sheen when it rains — record their
+    // dry roughness / env intensity so the loop can lerp them by the wetness factor.
+    for (const wm of [roofMat, roofTileMat, ...facades.materials]) {
+      wetMats.push({ m: wm, r0: wm.roughness, e0: wm.envMapIntensity != null ? wm.envMapIntensity : 1 });
+    }
     const roofTileGeoms = [];                              // pitched hip roofs (one merged mesh)
     const pitchedSet = new Set();                          // polys given a pitched roof (skip flat detail)
 
@@ -1147,6 +1161,45 @@ export function createVeyraWorld(container, opts) {
         roadMesh.position.y = 0.14; roadMesh.receiveShadow = true;
         scene.add(roadMesh);
       }
+    }
+
+    // ── Rain PUDDLES — reflective discs scattered on the carriageways (the low,
+    // flat spots where water pools). One InstancedMesh; faded in by the wetness
+    // factor in the loop. Dark + glossy so they mirror the sky/IBL like real water. ──
+    const puddleN = q.tier === 'high' ? 90 : q.tier === 'mid' ? 56 : 26;
+    if (roadList.length) {
+      const pgeo = new THREE.CircleGeometry(1, 18); pgeo.rotateX(-Math.PI / 2);
+      ownedGeoms.push(pgeo);
+      puddleMat = new THREE.MeshStandardMaterial({
+        color: hsl(205, 0.08, 0.16), roughness: 0.06, metalness: 0,
+        transparent: true, opacity: 0, depthWrite: false,
+      });
+      puddleMat.envMapIntensity = 1.6;
+      puddleMat.polygonOffset = true; puddleMat.polygonOffsetFactor = -3; puddleMat.polygonOffsetUnits = -3;
+      localMats.push(puddleMat);
+      puddles = new THREE.InstancedMesh(pgeo, puddleMat, puddleN);
+      puddles.frustumCulled = false; puddles.renderOrder = 2; puddles.visible = false;
+      const m = new THREE.Matrix4(), e = new THREE.Euler(), qq = new THREE.Quaternion(), p = new THREE.Vector3(), s = new THREE.Vector3();
+      for (let i = 0; i < puddleN; i++) {
+        const r = roadList[Math.floor(hash01(i * 7.3, i * 2.1) * roadList.length) % roadList.length];
+        const pts = r.pts;
+        const segs = Math.max(1, pts.length - 1);
+        const si = Math.floor(hash01(i * 1.7 + 3, i) * segs) % segs;
+        const a = pts[si], b = pts[si + 1] || pts[si];
+        const tt = hash01(i * 3.1, i * 5.7);
+        const hw = (r.w && r.w > 0 ? r.w : 4) / 2;
+        const dx = b[0] - a[0], dz = b[1] - a[1], len = Math.hypot(dx, dz) || 1;
+        const nx = -dz / len, nz = dx / len;
+        const jitter = (hash01(i * 9.1, i + 1) - 0.5) * hw * 1.2;
+        const x = a[0] + dx * tt + nx * jitter, z = a[1] + dz * tt + nz * jitter;
+        const sx = 0.7 + hash01(i, i * 2) * 2.0, sz = sx * (0.6 + hash01(i, i * 3) * 0.6);
+        e.set(0, hash01(i, i * 4) * Math.PI, 0); qq.setFromEuler(e);
+        p.set(x, 0.155, z); s.set(sx, 1, sz); m.compose(p, qq, s);
+        puddles.setMatrixAt(i, m);
+      }
+      puddles.instanceMatrix.needsUpdate = true;
+      puddles.matrixAutoUpdate = false; puddles.updateMatrix();
+      scene.add(puddles); ownedInstanced.push(puddles);
     }
 
     // ─────────────── STREET LIFE — Hanoi items along the roads ────────────
@@ -2201,23 +2254,27 @@ export function createVeyraWorld(container, opts) {
     const farEnough = (x, z, d) => !placed.some((p) => Math.hypot(p[0] - x, p[1] - z) < d);
     const lakeEnd = (a, b) => (Math.hypot(a[0] - lakeCx, a[1] - lakeCz) <= Math.hypot(b[0] - lakeCx, b[1] - lakeCz) ? a : b);
 
-    // 1) Street-name plates on the main roads nearest the lake.
-    const NAMES = ['Hàng Đào', 'Hàng Ngang', 'Hàng Đường', 'Hàng Gai', 'Hàng Bạc', 'Hàng Bồ', 'Hàng Bông', 'Hàng Mã', 'Hàng Thiếc', 'Hàng Quạt', 'Hàng Buồm', 'Lương Văn Can', 'Lý Quốc Sư', 'Cầu Gỗ', 'Đinh Liệt', 'Tạ Hiện', 'Mã Mây', 'Lò Sũ', 'Đinh Tiên Hoàng', 'Lê Thái Tổ'];
-    const capPho = TIER === 'low' ? 6 : TIER === 'mid' ? 12 : 20;
-    const cand = roadList
-      .filter((r) => r.w >= 3 && r.pts && r.pts.length >= 2)
-      .map((r) => { const a = r.pts[0], b = r.pts[r.pts.length - 1]; return { r, a, b, d: Math.hypot((a[0] + b[0]) / 2 - lakeCx, (a[1] + b[1]) / 2 - lakeCz) }; })
-      .sort((p, q2) => p.d - q2.d);
-    let ni = 0;
-    for (const cnd of cand) {
-      if (ni >= capPho) break;
-      const near = lakeEnd(cnd.a, cnd.b), far = near === cnd.a ? cnd.b : cnd.a;
-      const dl = Math.hypot(near[0] - lakeCx, near[1] - lakeCz);
-      if (dl < lakeR + 3 || dl > lakeR + 240 || !farEnough(near[0], near[1], 16) || within(near[0], near[1])) continue;
-      let dx = far[0] - near[0], dz = far[1] - near[1]; const dn = Math.hypot(dx, dz) || 1; dx /= dn; dz /= dn;
-      const off = cnd.r.w / 2 + 0.7;
-      poleSign(near[0] - dz * off, near[1] + dx * off, Math.atan2(dx, dz), plateTex('PHỐ ' + NAMES[ni % NAMES.length].toUpperCase(), 'QUẬN HOÀN KIẾM'), 2.2, 2.9);
-      placed.push(near); ni++;
+    // 1) Street-name plates at each lakeside street's REAL compass position.
+    // Axes: N=−z, S=+z, E=+x, W=−x; angle a → offset (sin a, cos a)·R.
+    const LAKE_STREETS = [
+      [Math.PI / 2, 'ĐINH TIÊN HOÀNG'],     // E shore (statue + post office)
+      [-Math.PI / 2, 'LÊ THÁI TỔ'],          // W shore
+      [0, 'HÀNG KHAY'],                      // S edge
+      [Math.PI, 'CẦU GỖ'],                   // N edge
+      [Math.PI / 4, 'TRÀNG TIỀN'],           // SE → Opera House
+      [3 * Math.PI / 4, 'LÒ SŨ'],            // NE
+      [-3 * Math.PI / 4, 'LƯƠNG VĂN CAN'],   // NW
+      [-Math.PI / 4, 'HÀNG BÀI'],            // SW
+      [Math.PI * 0.86, 'HÀNG ĐÀO'],          // N → Old Quarter
+    ];
+    const capPho = TIER === 'low' ? 5 : TIER === 'mid' ? 7 : LAKE_STREETS.length;
+    const Rstreet = lakeR + 4;
+    for (let i = 0; i < capPho && i < LAKE_STREETS.length; i++) {
+      const [a, name] = LAKE_STREETS[i];
+      const x = lakeCx + Math.sin(a) * Rstreet, z = lakeCz + Math.cos(a) * Rstreet;
+      const ang = Math.atan2(lakeCx - x, lakeCz - z);   // face the lakeside path
+      poleSign(x, z, ang, plateTex('PHỐ ' + name, 'QUẬN HOÀN KIẾM'), 2.2, 2.9);
+      placed.push([x, z]);
     }
 
     // 2) "NGÕ" alley plates on the narrow roads nearest the lake.
@@ -2266,19 +2323,27 @@ export function createVeyraWorld(container, opts) {
       circles.push({ x: px, z: pz, r: 0.35 });
     })();
 
-    // 4) Brand signboards (colored fascia) on further main-road frontages.
-    const BRANDS = [['PHỞ THÌN', '#a01620'], ['CỘNG CÀ PHÊ', '#2f5d3a'], ['HIGHLANDS COFFEE', '#7a1620'], ['BÁNH MÌ 25', '#b8860b'], ['VÀNG BẠC BẢO TÍN', '#9c7212'], ['LỤA HÀ ĐÔNG', '#7d2b6b'], ['KEM TRÀNG TIỀN', '#1f6f8b'], ['BIA HƠI HÀ NỘI', '#b5402a']];
-    const capBrand = TIER === 'low' ? 0 : TIER === 'mid' ? 5 : 8;
+    // 4) Brand signboards at their real-ish lakeside spots (skipped if they'd
+    //    collide with a landmark plot or another sign).
+    const LAKE_BRANDS = [
+      [-3 * Math.PI / 4, 'THỦY TẠ', '#1f6f8b', lakeR + 3],          // NW lakeside café/kem
+      [Math.PI, 'HÀM CÁ MẬP', '#33414d', lakeR + 9],               // N — Đông Kinh Nghĩa Thục
+      [3 * Math.PI / 4, 'HIGHLANDS COFFEE', '#7a1620', lakeR + 8],  // NE
+      [Math.PI / 2 - 0.22, 'LỤC THỦY', '#2f5d3a', lakeR + 5],       // E lakeside
+      [Math.PI / 2 + 0.22, 'NOTE COFFEE', '#caa12a', lakeR + 6],    // E/NE
+      [0.32, 'KEM TRÀNG TIỀN', '#a01620', lakeR + 6],              // S → Tràng Tiền
+      [Math.PI * 0.7, 'CỘNG CÀ PHÊ', '#2f5d3a', lakeR + 7],         // N
+      [-0.45, 'LONG VÂN', '#9c7212', lakeR + 6],                    // S/SW lakeside
+    ];
+    const capBrand = TIER === 'low' ? 0 : TIER === 'mid' ? 5 : LAKE_BRANDS.length;
     let bi = 0;
-    for (const cnd of cand) {
-      if (bi >= capBrand) break;
-      const near = lakeEnd(cnd.a, cnd.b), far = near === cnd.a ? cnd.b : cnd.a;
-      const dl = Math.hypot(far[0] - lakeCx, far[1] - lakeCz);
-      if (dl < lakeR + 6 || dl > lakeR + 200 || !farEnough(far[0], far[1], 18) || within(far[0], far[1])) continue;
-      let dx = near[0] - far[0], dz = near[1] - far[1]; const dn = Math.hypot(dx, dz) || 1; dx /= dn; dz /= dn;
-      const off = cnd.r.w / 2 + 0.7;
-      poleSign(far[0] - dz * off, far[1] + dx * off, Math.atan2(dx, dz), plateTex(BRANDS[bi][0], null, BRANDS[bi][1], 640, 150), 2.6, 3.1, 150 / 640);
-      placed.push(far); bi++;
+    for (let i = 0; i < LAKE_BRANDS.length && bi < capBrand; i++) {
+      const [a, name, col, R] = LAKE_BRANDS[i];
+      const x = lakeCx + Math.sin(a) * R, z = lakeCz + Math.cos(a) * R;
+      if (within(x, z) || !farEnough(x, z, 10)) continue;
+      const ang = Math.atan2(lakeCx - x, lakeCz - z);
+      poleSign(x, z, ang, plateTex(name, null, col, 640, 150), 2.6, 3.1, 150 / 640);
+      placed.push([x, z]); bi++;
     }
   }
 
@@ -3104,6 +3169,15 @@ export function createVeyraWorld(container, opts) {
       perfHudOn = !perfHudOn;
       perfHud.style.display = perfHudOn ? 'block' : 'none';
       perfAccum = 0; perfFrames = 0;
+    } else if (e.key === 'r' || e.key === 'R') {
+      // Cycle the dev weather override: real → clear → light rain → heavy rain → real.
+      forceWx = forceWx >= 2 ? -1 : forceWx + 1;
+      if (forceWx >= 0) {
+        const w = FORCE_WX[forceWx];
+        curOvercast = w.o; curRain = w.r;
+        environment.setWeather({ overcast: w.o, rain: w.r });
+        applyFog(w.o);
+      }
     }
   };
   window.addEventListener('keydown', onPerfKey);
@@ -3131,17 +3205,43 @@ export function createVeyraWorld(container, opts) {
   }
 
   // ── Rain (weather) ───────────────────────────────────────
-  // Falling rain Points. We carry a per-frame horizontal SLANT (driven by the real
-  // wind speed) so a windy downpour visibly leans; the points are reused as they
-  // fall below y=0.
-  const rainN = q.tier === 'low' ? 0 : Math.round(420 * density);
+  // Falling rain as STREAKS (LineSegments), in a tall box re-centred on the CAMERA
+  // each frame so the downpour fills the whole view (not just where the avatar is).
+  // Each drop is a short segment leaning down-wind; reused as it falls past the ground.
+  const rainN = q.tier === 'low' ? 0 : Math.round(900 * density);
+  const RAIN_BX = 95, RAIN_BY = 65;     // half-width (x/z) and height of the rain volume
   let rainPts = null;
+  const rainBase = rainN ? new Float32Array(rainN * 3) : null;   // drop HEAD positions
   if (rainN) {
-    const pg = new THREE.BufferGeometry(), pos = new Float32Array(rainN * 3);
-    for (let i = 0; i < rainN; i++) { pos[i * 3] = (Math.random() - 0.5) * 120; pos[i * 3 + 1] = Math.random() * 52; pos[i * 3 + 2] = (Math.random() - 0.5) * 120; }
+    const pos = new Float32Array(rainN * 2 * 3);  // 2 vertices (head + tail) per drop
+    for (let i = 0; i < rainN; i++) {
+      rainBase[i * 3] = (Math.random() - 0.5) * RAIN_BX * 2;
+      rainBase[i * 3 + 1] = Math.random() * RAIN_BY;
+      rainBase[i * 3 + 2] = (Math.random() - 0.5) * RAIN_BX * 2;
+    }
+    const pg = new THREE.BufferGeometry();
     pg.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-    rainPts = new THREE.Points(pg, new THREE.PointsMaterial({ color: 0xc4d2d6, size: 0.5, transparent: true, opacity: 0, depthWrite: false, fog: true }));
-    rainPts.visible = false; scene.add(rainPts);
+    rainPts = new THREE.LineSegments(pg, new THREE.LineBasicMaterial({ color: 0xaebfc6, transparent: true, opacity: 0, depthWrite: false, fog: true }));
+    rainPts.frustumCulled = false; rainPts.visible = false; scene.add(rainPts);
+  }
+
+  // ── Rain SPLASHES — tiny rings that pop + expand where drops hit the ground.
+  // A pool of flat ring meshes (own material each → per-splash opacity), spawned
+  // around the camera while it rains (rate scales with intensity), then fade fast. ──
+  const splashN = rainN ? (q.tier === 'high' ? 24 : 14) : 0;
+  let splashes = null;
+  if (splashN) {
+    const sgeo = new THREE.RingGeometry(0.16, 0.24, 12); sgeo.rotateX(-Math.PI / 2);
+    ownedGeoms.push(sgeo);
+    const meshes = [], st = [];
+    for (let i = 0; i < splashN; i++) {
+      const sm = new THREE.MeshBasicMaterial({ color: 0xd2e6ea, transparent: true, opacity: 0, depthWrite: false, fog: true, side: THREE.DoubleSide });
+      localMats.push(sm);
+      const sp = new THREE.Mesh(sgeo, sm);
+      sp.visible = false; sp.renderOrder = 2; sp.frustumCulled = false;
+      scene.add(sp); meshes.push(sp); st.push({ active: false, age: 0, life: 0.4 });
+    }
+    splashes = { meshes, st, acc: 0 };
   }
 
   // ── REAL weather + REAL time-of-day (Open-Meteo, keyless) ──
@@ -3201,12 +3301,14 @@ export function createVeyraWorld(container, opts) {
         const windKmh = c.wind_speed_10m ?? 0;
         const cloud = c.cloud_cover ?? 0;
         const m = mapWeatherCode(code, cloud);
-        curOvercast = m.overcast; curRain = m.rain;
+        if (forceWx < 0) {   // real weather (skip while the dev override is active)
+          curOvercast = m.overcast; curRain = m.rain;
+          environment.setWeather({ overcast: curOvercast, rain: curRain });
+          applyFog(curOvercast);
+        }
         windAmt = Math.max(0, Math.min(1, windKmh / 40));
         const windDeg = c.wind_direction_10m;
         if (typeof windDeg === 'number') windDir = (windDeg * Math.PI) / 180;
-        environment.setWeather({ overcast: curOvercast, rain: curRain });
-        applyFog(curOvercast);
         emitWeather(tempC, m, windKmh);
       })
       .catch(() => { /* keep real-time tod + mild default weather */ });
@@ -3629,25 +3731,68 @@ export function createVeyraWorld(container, opts) {
     wet += (targetRain - wet) * Math.min(1, dt * 0.6);
     rainAmt += (targetRain - rainAmt) * Math.min(1, dt * 0.8);
     mats.setWetness && mats.setWetness(wet);
+    // Extend the wet look to the roofs + façades + the puddles (throttled: wetness
+    // changes slowly). Roofs/walls gain a reflective sheen; puddles fade in.
+    if (Math.abs(wet - lastWet) > 0.01) {
+      lastWet = wet;
+      for (let i = 0; i < wetMats.length; i++) {
+        const w = wetMats[i];
+        w.m.roughness = w.r0 * (1 - 0.5 * wet);
+        w.m.envMapIntensity = w.e0 * (1 + 1.1 * wet);
+      }
+      if (puddleMat) puddleMat.opacity = Math.min(0.82, wet * 0.95);
+      if (puddles) puddles.visible = wet > 0.02;
+    }
     if (rainPts) {
-      rainPts.visible = rainAmt > 0.04;
+      rainPts.visible = rainAmt > 0.03;
       if (rainPts.visible) {
         const arr = rainPts.geometry.attributes.position.array;
-        // Wind slants the rain: drift each drop horizontally as it falls. windAmt is
-        // 0..1 from the real wind speed; keep the lean subtle.
-        const slant = dt * 46 * windAmt * 0.9;
+        const fall = dt * 58;                       // fall distance this frame
+        const slant = fall * windAmt * 0.8;         // wind lean
+        // Streak vector (head→tail): opposite the velocity, fixed length.
+        const len = 1.0 + rainAmt * 0.9;
+        const vmag = Math.hypot(slant, fall) || 1;
+        const tdx = (slant / vmag) * len, tdy = (fall / vmag) * len;
         for (let i = 0; i < rainN; i++) {
-          arr[i * 3] += slant;
-          arr[i * 3 + 1] -= dt * 46;
-          if (arr[i * 3 + 1] < 0 || arr[i * 3] > 60) {
-            arr[i * 3 + 1] = 52;
-            arr[i * 3] = (Math.random() - 0.5) * 120;
-            arr[i * 3 + 2] = (Math.random() - 0.5) * 120;
-          }
+          let bx = rainBase[i * 3] + slant, by = rainBase[i * 3 + 1] - fall, bz = rainBase[i * 3 + 2];
+          if (by < 0 || bx > RAIN_BX) { by = RAIN_BY; bx = (Math.random() - 0.5) * RAIN_BX * 2; bz = (Math.random() - 0.5) * RAIN_BX * 2; }
+          rainBase[i * 3] = bx; rainBase[i * 3 + 1] = by; rainBase[i * 3 + 2] = bz;
+          const k = i * 6;
+          arr[k] = bx; arr[k + 1] = by; arr[k + 2] = bz;                 // head (bottom)
+          arr[k + 3] = bx - tdx; arr[k + 4] = by + tdy; arr[k + 5] = bz; // tail (up-wind)
         }
         rainPts.geometry.attributes.position.needsUpdate = true;
-        rainPts.position.set(pp.x, 0, pp.z);
-        rainPts.material.opacity = rainAmt * 0.6;
+        rainPts.position.set(camPos.x, 0, camPos.z);   // follow the CAMERA → fills the view
+        rainPts.material.opacity = Math.min(0.55, rainAmt * 0.7);
+      }
+    }
+
+    // Rain splashes: spawn near the camera while it rains (rate ∝ intensity), then
+    // each pops + expands + fades. Ageing runs every frame so they finish cleanly
+    // after the rain stops.
+    if (splashes) {
+      const raining = rainAmt > 0.05;
+      if (raining) {
+        splashes.acc += dt * (1 + rainAmt * 6);
+        const interval = 0.045;
+        while (splashes.acc > interval) {
+          splashes.acc -= interval;
+          const idx = splashes.st.findIndex((s) => !s.active);
+          if (idx < 0) break;
+          const s = splashes.st[idx];
+          s.active = true; s.age = 0; s.life = 0.32 + Math.random() * 0.22;
+          const rr = Math.random() * 34, aa = Math.random() * Math.PI * 2;
+          splashes.meshes[idx].position.set(camPos.x + Math.cos(aa) * rr, 0.06, camPos.z + Math.sin(aa) * rr);
+          splashes.meshes[idx].visible = true;
+        }
+      }
+      for (let i = 0; i < splashes.st.length; i++) {
+        const s = splashes.st[i]; if (!s.active) continue;
+        s.age += dt; const tt = s.age / s.life;
+        const sp = splashes.meshes[i];
+        if (tt >= 1) { s.active = false; sp.visible = false; continue; }
+        const sc = 0.4 + tt * 2.6; sp.scale.set(sc, sc, sc);
+        sp.material.opacity = (1 - tt) * 0.42;
       }
     }
 
