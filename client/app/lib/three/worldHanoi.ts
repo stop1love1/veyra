@@ -295,7 +295,7 @@ export function createVeyraWorld(container, opts) {
       const x = cx + Math.cos(a) * rr, y = cy + Math.sin(a) * rr * 0.92;
       const w = lmin + Math.random() * (lmax - lmin), h = w * (0.5 + Math.random() * 0.4);
       const shade = 1 - (y / size) * 0.35;
-      let hue = hueBase + Math.random() * hueSpread, sat = 46 + Math.random() * 24, light = (20 + Math.random() * 22) * shade;
+      let hue = hueBase + Math.random() * hueSpread, sat = 50 + Math.random() * 22, light = (34 + Math.random() * 22) * shade;
       // Flowering species: scatter warm blossom dabs (vermilion / pink) among the green.
       if (o.warm && Math.random() < 0.42) { hue = Math.random() < 0.5 ? 4 + Math.random() * 18 : 330 + Math.random() * 22; sat = 70 + Math.random() * 22; light = (40 + Math.random() * 18) * shade; }
       ctx.save();
@@ -387,7 +387,7 @@ export function createVeyraWorld(container, opts) {
       map: tex, color: 0xffffff, roughness: 1.0, metalness: 0,
       alphaTest: 0.5, side: THREE.DoubleSide,    // alphaTest (not transparent) → no sort issues
       transparent: false, depthWrite: true,
-      emissiveMap: tex, emissive: new THREE.Color(0xffffff), emissiveIntensity: 0.4,
+      emissiveMap: tex, emissive: new THREE.Color(0xffffff), emissiveIntensity: 0.28,
     });
     mat.envMapIntensity = 0.35;                   // gentle diffuse sky ambient (matte → no sheen)
     localMats.push(mat);
@@ -423,16 +423,16 @@ export function createVeyraWorld(container, opts) {
     const SPECIES = [
       { key: 'broadleaf', weight: 0.42, mode: 'volume', cards: Math.round(6 * lod),
         tex: makeLeafTexture({ hueBase: 96, hueSpread: 24, leafMin: 6, leafMax: 15, count: 340 }),
-        trunkMat: mats.bark, trunkTop: 0.12, trunkBot: 0.30, hMin: 5.0, hMax: 8.5, canMin: 1.8, canMax: 3.1, vstretch: 1.0, tint: [104, 0.34, 0.35] },
+        trunkMat: mats.bark, trunkTop: 0.12, trunkBot: 0.30, hMin: 5.0, hMax: 8.5, canMin: 1.8, canMax: 3.1, vstretch: 1.0, tint: [104, 0.40, 0.42] },
       { key: 'slender', weight: 0.24, mode: 'volume', cards: Math.round(5 * lod),
         tex: makeLeafTexture({ hueBase: 110, hueSpread: 22, leafMin: 5, leafMax: 11, count: 300 }),
-        trunkMat: mats.bark, trunkTop: 0.10, trunkBot: 0.22, hMin: 7.0, hMax: 11.0, canMin: 1.2, canMax: 2.0, vstretch: 1.6, tint: [112, 0.32, 0.36] },
+        trunkMat: mats.bark, trunkTop: 0.10, trunkBot: 0.22, hMin: 7.0, hMax: 11.0, canMin: 1.2, canMax: 2.0, vstretch: 1.6, tint: [112, 0.38, 0.43] },
       { key: 'flower', weight: 0.14, mode: 'volume', cards: Math.round(6 * lod),
         tex: makeLeafTexture({ hueBase: 92, hueSpread: 26, leafMin: 6, leafMax: 14, count: 340, warm: true }),
-        trunkMat: mats.bark, trunkTop: 0.14, trunkBot: 0.30, hMin: 5.0, hMax: 8.0, canMin: 1.9, canMax: 3.0, vstretch: 0.9, tint: [104, 0.38, 0.37] },
+        trunkMat: mats.bark, trunkTop: 0.14, trunkBot: 0.30, hMin: 5.0, hMax: 8.0, canMin: 1.9, canMax: 3.0, vstretch: 0.9, tint: [104, 0.42, 0.44] },
       { key: 'palm', weight: 0.20, mode: 'palm', cards: Math.round(9 * lod),
         tex: makePalmFrondTexture(), trunkMat: palmTrunkMat, trunkTop: 0.16, trunkBot: 0.28,
-        hMin: 7.0, hMax: 12.0, canMin: 2.2, canMax: 3.2, vstretch: 1.0, tint: [110, 0.4, 0.4] },
+        hMin: 7.0, hMax: 12.0, canMin: 2.2, canMax: 3.2, vstretch: 1.0, tint: [110, 0.44, 0.46] },
     ];
     // Cumulative weights for assignment.
     let acc = 0; for (const s of SPECIES) { s._c0 = acc; acc += s.weight; s._c1 = acc; }
