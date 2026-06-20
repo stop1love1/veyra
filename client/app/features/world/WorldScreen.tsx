@@ -83,7 +83,6 @@ function World3D({ g }: { g: Game }) {
   const sendChat = React.useCallback(() => {
     const el = chatInputRef.current;
     const text = (el?.value || '').trim();
-    console.log('[chat] sendChat text=', JSON.stringify(text), 'worldApi?', !!worldApi.current, 'say?', typeof worldApi.current?.say, 'rt?', !!rtRef.current);
     if (text) { rtRef.current?.sendChat(text); worldApi.current?.say?.(text); }
     if (el) el.value = '';
     setChatOpen(false);
@@ -129,8 +128,9 @@ function World3D({ g }: { g: Game }) {
     const shops = VEYRA.SHOPS.map((s) => ({ id: s.id, hue: s.hue, name: VEYRA.tx(s.name, g.lang) }));
     // Stable multiplayer identity: the auth user id when signed in, else the
     // guest id. Name/hue float above the avatar; both guests and signed-in
-    // players share the world.
-    const selfId = g.auth.user ? g.auth.user.id : guestName;
+    // players share the world. Fall back to email if a stale cached user is
+    // missing `id` so selfId is never empty (empty → no chat bubble at all).
+    const selfId = g.auth.user ? (g.auth.user.id || g.auth.user.email || guestName) : guestName;
     const selfName = g.auth.user ? (g.auth.user.name || g.auth.user.email) : guestName;
     worldApi.current = createVeyraWorld(ref.current, {
       playerHue: g.player.hue, playerAge: g.player.age, playerAvatarUrl: g.player.avatarUrl || '', lite: false,
