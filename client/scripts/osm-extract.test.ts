@@ -54,9 +54,9 @@ describe('transform(elements)', () => {
     const far = { type: 'way', tags: { building: 'house', name: 'Xa' }, geometry: ring(21.0500, 105.8800) }; // ~> 520 m
     const out = transform([near, far], opts);
     expect(out.buildings).toHaveLength(2);
-    const tagged = out.buildings.find((b) => b.tags);
-    expect(tagged.tags).toMatchObject({ type: 'apartments', levels: 5, name: 'Nhà A' });
-    const untagged = out.buildings.find((b) => !b.tags);
+    const tagged = out.buildings.find((b: any) => b.tags);
+    expect((tagged as any).tags).toMatchObject({ type: 'apartments', levels: 5, name: 'Nhà A' });
+    const untagged = out.buildings.find((b: any) => !b.tags);
     expect(untagged).toBeTruthy(); // the far one keeps poly+h only
   });
 
