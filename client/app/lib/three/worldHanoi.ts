@@ -41,6 +41,7 @@ import { createMaterials } from './shared/materials';
 import { createComposer } from './shared/postfx';
 import { createBuildings } from './shared/buildings';
 import { createStreetProps } from './shared/streetprops';
+import { buildSocialBenches, benchSlots, occupiedSeats } from './shared/benches';
 import { createHanoiFacades } from './shared/hanoiFacades';
 import { createHanoiItems } from './shared/hanoiItems';
 import { createHanoiAmbience } from './shared/hanoiAmbience';
@@ -133,15 +134,12 @@ export function createVeyraWorld(container, opts) {
   // ── External CC0 assets (textures + GLB), all with procedural fallbacks ──
   const texer = createTextureLoader({ anisotropy: q.anisotropy });
   const kit = createKitLoader();
-  // CC0 Kenney Nature Kit trees (green broadleaf + a palm); fewer varieties on low.
-  const TREE_GLBS = q.tier === 'low'
-    ? ['/models/nature/tree_default.glb', '/models/nature/tree_oak.glb', '/models/nature/tree_tall.glb']
-    : ['/models/nature/tree_default.glb', '/models/nature/tree_detailed.glb', '/models/nature/tree_oak.glb',
-       '/models/nature/tree_fat.glb', '/models/nature/tree_tall.glb', '/models/nature/tree_palmTall.glb'];
-  // Kick GLB preloads off immediately (resolved before build() places them).
-  const kitReady = kit.preloadUrls(
-    q.tier === 'low' ? TREE_GLBS : [...TREE_GLBS, 'build:detail-awning', 'build:detail-parasol-a'],
-  );
+  // Trees are now fully procedural (realistic alpha-leaf cards — see buildRealisticTrees),
+  // so we no longer preload the low-poly Kenney tree GLBs. The kit still supplies a
+  // couple of rooftop detail props on mid/high.
+  const kitReady = q.tier === 'low'
+    ? Promise.resolve()
+    : kit.preloadUrls(['build:detail-awning', 'build:detail-parasol-a']);
 
   // Configure façade material tiling ONCE: walls are UV-mapped in METRES, so each
   // map repeats every (tileWidth × tileHeight) metres. DoubleSide because the walls
@@ -246,6 +244,100 @@ export function createVeyraWorld(container, opts) {
     return tex;
   }
 
+  // Procedural GRASS albedo: a tileable mottle of many green shades + a scatter of
+  // short blade strokes and a few dry/brown flecks, so the lawns read as real grass
+  // instead of a flat fill. Seamless (draws wrap-around). Repeat is set by the caller.
+  function makeGrassTexture(size = 256) {
+    const c = document.createElement('canvas'); c.width = c.height = size;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#4f6a33'; ctx.fillRect(0, 0, size, size);
+    // Soft clumps of varied green (and a few earthy patches) for large-scale variation.
+    for (let i = 0; i < 700; i++) {
+      const x = Math.random() * size, y = Math.random() * size, r = 6 + Math.random() * 26;
+      const dry = Math.random() < 0.12;
+      const h = dry ? 60 + Math.random() * 20 : 88 + Math.random() * 36;
+      const s = dry ? 32 : 38 + Math.random() * 26;
+      const l = (dry ? 30 : 24) + Math.random() * 20;
+      ctx.fillStyle = `hsla(${h},${s}%,${l}%,0.22)`;
+      ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fill();
+    }
+    // Fine blade strokes for close-up detail.
+    for (let i = 0; i < 2600; i++) {
+      const x = Math.random() * size, y = Math.random() * size;
+      const len = 2 + Math.random() * 5, ang = -Math.PI / 2 + (Math.random() - 0.5) * 0.7;
+      ctx.strokeStyle = `hsla(${92 + Math.random() * 36},${44 + Math.random() * 26}%,${20 + Math.random() * 26}%,0.5)`;
+      ctx.lineWidth = Math.random() < 0.5 ? 1 : 1.5;
+      ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + Math.cos(ang) * len, y + Math.sin(ang) * len); ctx.stroke();
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.colorSpace = THREE.SRGBColorSpace;
+    if (q.anisotropy) tex.anisotropy = q.anisotropy;
+    return tex;
+  }
+
+  // Procedural LEAF-CLUSTER card (RGBA, alpha-cut): a soft blob of many small leaf
+  // ellipses on a transparent ground. Parametrised so each tree SPECIES gets its own
+  // foliage look (leaf size, density, hue, and an optional warm flowering mix for
+  // phượng / lộc vừng). Drawn onto crossed billboard quads it reads as organic foliage.
+  function makeLeafTexture(o = {}) {
+    const size = o.size || 256;
+    const count = o.count || 320, lmin = o.leafMin || 6, lmax = o.leafMax || 15;
+    const hueBase = o.hueBase != null ? o.hueBase : 96, hueSpread = o.hueSpread != null ? o.hueSpread : 34;
+    const c = document.createElement('canvas'); c.width = c.height = size;
+    const ctx = c.getContext('2d');
+    const cx = size / 2, cy = size / 2, R = size * 0.46;
+    for (let i = 0; i < count; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const rr = (Math.random() ** 0.5) * R * (0.6 + Math.random() * 0.4);
+      const x = cx + Math.cos(a) * rr, y = cy + Math.sin(a) * rr * 0.92;
+      const w = lmin + Math.random() * (lmax - lmin), h = w * (0.5 + Math.random() * 0.4);
+      const shade = 1 - (y / size) * 0.35;
+      let hue = hueBase + Math.random() * hueSpread, sat = 46 + Math.random() * 24, light = (20 + Math.random() * 22) * shade;
+      // Flowering species: scatter warm blossom dabs (vermilion / pink) among the green.
+      if (o.warm && Math.random() < 0.42) { hue = Math.random() < 0.5 ? 4 + Math.random() * 18 : 330 + Math.random() * 22; sat = 70 + Math.random() * 22; light = (40 + Math.random() * 18) * shade; }
+      ctx.save();
+      ctx.translate(x, y); ctx.rotate(Math.random() * Math.PI);
+      ctx.fillStyle = `hsla(${hue},${sat}%,${light}%,0.92)`;
+      ctx.beginPath(); ctx.ellipse(0, 0, w, h, 0, 0, 7); ctx.fill();
+      ctx.restore();
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    if (q.anisotropy) tex.anisotropy = q.anisotropy;
+    return tex;
+  }
+
+  // Procedural PALM FROND card (RGBA, alpha-cut): a central rib with angled leaflets
+  // tapering to a tip, drawn tip-UP on a tall card. Radiated from a slim trunk it
+  // reads as a fan/coconut palm — a distinct silhouette from the broadleaf canopies.
+  function makePalmFrondTexture(w = 128, h = 256) {
+    const c = document.createElement('canvas'); c.width = w; c.height = h;
+    const ctx = c.getContext('2d');
+    const midX = w / 2;
+    // Rib from base (bottom) to tip (top).
+    ctx.strokeStyle = 'hsla(96,40%,26%,0.95)'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(midX, h - 4); ctx.lineTo(midX, 10); ctx.stroke();
+    const N = 26;
+    for (let i = 0; i < N; i++) {
+      const t = i / (N - 1);
+      const y = (h - 8) - t * (h - 18);
+      const taper = Math.sin(t * Math.PI) * 0.9 + 0.1;     // longest leaflets mid-frond
+      const len = (w * 0.46) * taper;
+      const droop = 10 + t * 14;                            // leaflets angle up toward the tip
+      ctx.strokeStyle = `hsla(${94 + Math.random() * 26},${44 + Math.random() * 22}%,${22 + Math.random() * 16}%,0.92)`;
+      ctx.lineWidth = 2;
+      [-1, 1].forEach((sd) => {
+        ctx.beginPath(); ctx.moveTo(midX, y);
+        ctx.lineTo(midX + sd * len, y - droop); ctx.stroke();
+      });
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    if (q.anisotropy) tex.anisotropy = q.anisotropy;
+    return tex;
+  }
+
   // Build a Three.js Water on a flat (XY) geometry. The caller sets rotation.x =
   // -PI/2 + position so Water derives the correct upward reflection-plane normal.
   function makeLakeWater(geo) {
@@ -283,101 +375,150 @@ export function createVeyraWorld(container, opts) {
     return w;
   }
 
-  // Attach the wind-sway vertex shader to a foliage material (GLB or procedural).
-  // weight = local vertex height; displacement is in LOCAL space so it scales with
-  // the per-instance tree size. Shared swayUniforms are driven each frame.
-  function attachSway(mat) {
+  // Build the alpha-leaf-card material for a species (shared sway shader + alphaTest).
+  function makeLeafMaterial(tex) {
+    const mat = new THREE.MeshStandardMaterial({
+      map: tex, color: 0xffffff, roughness: 0.92, metalness: 0,
+      alphaTest: 0.42, side: THREE.DoubleSide,   // alphaTest (not transparent) → no sort issues
+    });
+    localMats.push(mat);
     mat.onBeforeCompile = (shader) => {
       shader.uniforms.uTime = swayUniforms.uTime;
       shader.uniforms.uWind = swayUniforms.uWind;
       shader.uniforms.uWindDir = swayUniforms.uWindDir;
       shader.vertexShader = 'uniform float uTime;\nuniform float uWind;\nuniform float uWindDir;\n' + shader.vertexShader;
-      shader.vertexShader = shader.vertexShader.replace(
-        '#include <begin_vertex>',
+      shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>',
         `#include <begin_vertex>
          float swayPhase = instanceMatrix[3].x * 0.15 + instanceMatrix[3].z * 0.15;
-         float swayAmt = sin(uTime * 1.6 + swayPhase) * (0.03 + uWind * 0.12) * max(position.y, 0.0);
+         float swayAmt = sin(uTime * 1.5 + swayPhase) * (0.06 + uWind * 0.24) * (position.y * 0.5 + 0.5);
          transformed.x += cos(uWindDir) * swayAmt;
-         transformed.z += sin(uWindDir) * swayAmt;`,
-      );
+         transformed.z += sin(uWindDir) * swayAmt;`);
     };
-    mat.needsUpdate = true;
+    return mat;
   }
 
-  // Build the ~800 OSM trees from instanced Kenney GLB varieties (one InstancedMesh
-  // per variety per primitive → a handful of draw calls). Returns false to fall back
-  // to the procedural trees. `treeUrls` are already-preloaded GLB URLs.
-  function buildGltfTrees(treeList, treeUrls, castShadows) {
-    const varieties = [];
-    for (const url of treeUrls) {
-      const root = kit.getByUrl(url);
-      root.updateMatrixWorld(true);
-      const prims = [];
-      root.traverse((o) => {
-        if (o.isMesh && o.geometry) {
-          // Bake the node's transform into a cloned geometry (instancing ignores the
-          // node hierarchy), so each primitive sits correctly with its base at y≈0.
-          const geo = o.geometry.clone();
-          geo.applyMatrix4(o.matrixWorld);
-          geo.computeBoundingBox();
-          prims.push({ geo, mat: o.material });
-        }
-      });
-      if (!prims.length) continue;
-      let maxY = 0;
-      for (const p of prims) maxY = Math.max(maxY, p.geo.boundingBox.max.y);
-      varieties.push({ prims, h: maxY || 1 });
-    }
-    if (!varieties.length) return false;
+  // Realistic instanced trees with MULTIPLE SPECIES (broadleaf shade tree, tall
+  // slender tree, flowering phượng/lộc vừng, and fan palms) so the greenery is as
+  // varied as the real Hoan Kiem shore. Each species has its own foliage texture,
+  // crown shape (volume canopy vs. radiating palm fronds), trunk + size band; trees
+  // are assigned by a weighted hash of their real position. Per species: one trunk
+  // InstancedMesh + one card InstancedMesh (a handful of draw calls total). Cards sway
+  // in the wind; trunks cast shadow on high; alpha cards never cast shadow.
+  function buildRealisticTrees(treeList, castShadows) {
+    const lod = q.tier === 'high' ? 1 : q.tier === 'mid' ? 0.8 : 0.6;   // fewer cards on weaker tiers
+    const palmTrunkMat = new THREE.MeshStandardMaterial({ color: hsl(34, 0.22, 0.5), roughness: 0.9, metalness: 0 });
+    localMats.push(palmTrunkMat);
 
-    // Wind sway on each variety's foliage material (name ~ leaf/green); ensure matte.
-    const swayed = new Set();
-    for (const v of varieties) for (const p of v.prims) {
-      if (!p.mat) continue;
-      const nm = (p.mat.name || '').toLowerCase();
-      if ((nm.includes('leaf') || nm.includes('green')) && !swayed.has(p.mat)) { attachSway(p.mat); swayed.add(p.mat); }
-      p.mat.metalness = 0;
-    }
+    // Species table. `mode`: 'volume' = rounded broadleaf crown of fanned cards;
+    // 'palm' = a slim trunk topped by radiating frond cards. `cards` is per-tree.
+    const SPECIES = [
+      { key: 'broadleaf', weight: 0.42, mode: 'volume', cards: Math.round(6 * lod),
+        tex: makeLeafTexture({ hueBase: 96, hueSpread: 30, leafMin: 6, leafMax: 15, count: 340 }),
+        trunkMat: mats.bark, trunkTop: 0.12, trunkBot: 0.30, hMin: 5.0, hMax: 8.5, canMin: 1.8, canMax: 3.1, vstretch: 1.0, tint: [104, 0.4, 0.36] },
+      { key: 'slender', weight: 0.24, mode: 'volume', cards: Math.round(5 * lod),
+        tex: makeLeafTexture({ hueBase: 110, hueSpread: 22, leafMin: 5, leafMax: 11, count: 300 }),
+        trunkMat: mats.bark, trunkTop: 0.10, trunkBot: 0.22, hMin: 7.0, hMax: 11.0, canMin: 1.2, canMax: 2.0, vstretch: 1.6, tint: [116, 0.42, 0.34] },
+      { key: 'flower', weight: 0.14, mode: 'volume', cards: Math.round(6 * lod),
+        tex: makeLeafTexture({ hueBase: 92, hueSpread: 26, leafMin: 6, leafMax: 14, count: 340, warm: true }),
+        trunkMat: mats.bark, trunkTop: 0.14, trunkBot: 0.30, hMin: 5.0, hMax: 8.0, canMin: 1.9, canMax: 3.0, vstretch: 0.9, tint: [40, 0.5, 0.5] },
+      { key: 'palm', weight: 0.20, mode: 'palm', cards: Math.round(9 * lod),
+        tex: makePalmFrondTexture(), trunkMat: palmTrunkMat, trunkTop: 0.16, trunkBot: 0.28,
+        hMin: 7.0, hMax: 12.0, canMin: 2.2, canMax: 3.2, vstretch: 1.0, tint: [110, 0.4, 0.4] },
+    ];
+    // Cumulative weights for assignment.
+    let acc = 0; for (const s of SPECIES) { s._c0 = acc; acc += s.weight; s._c1 = acc; }
 
-    // Assign each tree to a variety (seeded by position); count per variety.
+    // Assign every real tree to a species (seeded by position) + count per species.
+    const cardGeo = new THREE.PlaneGeometry(1, 1); ownedGeoms.push(cardGeo);
     const assign = new Array(treeList.length);
-    const counts = new Array(varieties.length).fill(0);
-    for (let i = 0; i < treeList.length; i++) {
-      const vi = Math.floor(hash01(treeList[i][0] * 3.1 + 7, treeList[i][1] * 1.7 - 3) * varieties.length) % varieties.length;
-      assign[i] = vi; counts[vi]++;
-    }
-    // Create the instanced meshes.
-    for (let vi = 0; vi < varieties.length; vi++) {
-      const v = varieties[vi];
-      v.insts = v.prims.map((p) => {
-        const im = new THREE.InstancedMesh(p.geo, p.mat, counts[vi]);
-        im.castShadow = castShadows; im.receiveShadow = false; im.frustumCulled = false;
-        ownedGeoms.push(p.geo);   // we own the baked clones
-        return im;
-      });
-    }
-    // Fill per-instance transforms (scale to a realistic 3.5–7 m height, random yaw).
-    const m = new THREE.Matrix4(), qrot = new THREE.Quaternion(), pos = new THREE.Vector3(), scl = new THREE.Vector3();
-    const up = new THREE.Vector3(0, 1, 0);
-    const vIdx = new Array(varieties.length).fill(0);
+    for (const s of SPECIES) s._n = 0;
     for (let i = 0; i < treeList.length; i++) {
       const tx = treeList[i][0], tz = treeList[i][1];
+      const h = hash01(tx * 1.7 + 11, tz * 0.9 - 4) * acc;
+      let s = SPECIES[0];
+      for (const sp of SPECIES) { if (h >= sp._c0 && h < sp._c1) { s = sp; break; } }
+      assign[i] = s; s._n++;
+    }
+
+    // Allocate the per-species instanced meshes + their own trunk geometry.
+    for (const s of SPECIES) {
+      if (!s._n) continue;
+      s._trunkGeo = new THREE.CylinderGeometry(s.trunkTop, s.trunkBot, 1, 7).translate(0, 0.5, 0);
+      ownedGeoms.push(s._trunkGeo);
+      s._leafMat = makeLeafMaterial(s.tex); ownedTextures.push(s.tex);
+      s._trunks = new THREE.InstancedMesh(s._trunkGeo, s.trunkMat, s._n);
+      s._cards = new THREE.InstancedMesh(cardGeo, s._leafMat, s._n * s.cards);
+      s._trunks.castShadow = castShadows; s._trunks.receiveShadow = false; s._trunks.frustumCulled = false;
+      s._cards.castShadow = false; s._cards.receiveShadow = false; s._cards.frustumCulled = false;
+      s._cards.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(s._n * s.cards * 3), 3);
+      s._ti = 0; s._ci = 0;
+    }
+
+    const m = new THREE.Matrix4(), e = new THREE.Euler(), quat = new THREE.Quaternion();
+    const pos = new THREE.Vector3(), scl = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0), col = new THREE.Color();
+    for (let i = 0; i < treeList.length; i++) {
+      const s = assign[i];
+      const tx = treeList[i][0], tz = treeList[i][1];
       circles.push({ x: tx, z: tz, r: 0.5 });   // trunk collision
-      const v = varieties[assign[i]];
-      const r1 = hash01(tx + 1.7, tz - 2.3), r3 = hash01(tx * 2.1 + 5, tz);
-      const s = (3.5 + r1 * 3.5) / v.h;
-      qrot.setFromAxisAngle(up, r3 * Math.PI * 2);
-      pos.set(tx, 0, tz); scl.set(s, s, s);
-      m.compose(pos, qrot, scl);
-      const li = vIdx[assign[i]]++;
-      for (const im of v.insts) im.setMatrixAt(li, m);
+      const r1 = hash01(tx + 1.7, tz - 2.3), r2 = hash01(tz * 1.3, tx * 0.7), r3 = hash01(tx * 2.1 + 5, tz);
+      const height = s.hMin + r1 * (s.hMax - s.hMin);
+      const trunkH = height * (s.mode === 'palm' ? 0.82 : 0.42);   // palms = tall bare trunk
+      const canopyR = s.canMin + r2 * (s.canMax - s.canMin);
+      const yaw = r3 * Math.PI * 2;
+      const ti = s._ti++;
+
+      // Trunk.
+      quat.setFromAxisAngle(up, yaw);
+      pos.set(tx, 0, tz); scl.set(0.85 + r2 * 0.5, trunkH, 0.85 + r2 * 0.5);
+      m.compose(pos, quat, scl); s._trunks.setMatrixAt(ti, m);
+
+      // Per-tree tint (multiplies the foliage texture).
+      col.setHSL((s.tint[0] + (r3 - 0.5) * 16) / 360, s.tint[1], s.tint[2] + r2 * 0.1);
+
+      if (s.mode === 'palm') {
+        // A crown of fronds radiating from the trunk top, arcing up-and-out then down.
+        const cy = trunkH;
+        for (let k = 0; k < s.cards; k++) {
+          const kr = hash01(tx + k * 3.3, tz - k * 1.9);
+          const fyaw = yaw + (k / s.cards) * Math.PI * 2 + (kr - 0.5) * 0.3;
+          const tilt = -0.55 - kr * 0.5;                 // arc outward then droop
+          const len = canopyR * (1.6 + kr * 0.7);
+          const ox = Math.cos(fyaw) * canopyR * 0.5, oz = Math.sin(fyaw) * canopyR * 0.5;
+          e.set(tilt, fyaw, 0); quat.setFromEuler(e);
+          pos.set(tx + ox, cy + 0.3, tz + oz); scl.set(len * 0.5, len, len);
+          m.compose(pos, quat, scl);
+          const ci = s._ci++;
+          s._cards.setMatrixAt(ci, m); s._cards.setColorAt(ci, col);
+        }
+      } else {
+        // Volume canopy: cards fanned + stacked to fill a rounded (or tall) crown.
+        const cy = trunkH + canopyR * 0.7 * s.vstretch;
+        for (let k = 0; k < s.cards; k++) {
+          const kr = hash01(tx + k * 3.3, tz - k * 1.9);
+          const cardYaw = yaw + (k / s.cards) * Math.PI * 2 + (kr - 0.5) * 0.5;
+          const tilt = (k % 2 ? 0.5 : -0.35) + (kr - 0.5) * 0.4;
+          const sz = canopyR * (1.7 + kr * 0.8);
+          const oy = (kr - 0.5) * canopyR * 0.7 * s.vstretch;
+          const ox = Math.cos(cardYaw) * canopyR * 0.25, oz = Math.sin(cardYaw) * canopyR * 0.25;
+          e.set(tilt, cardYaw, 0); quat.setFromEuler(e);
+          pos.set(tx + ox, cy + oy, tz + oz); scl.set(sz, sz * (0.8 + kr * 0.3) * s.vstretch, sz);
+          m.compose(pos, quat, scl);
+          const ci = s._ci++;
+          s._cards.setMatrixAt(ci, m); s._cards.setColorAt(ci, col);
+        }
+      }
     }
-    for (const v of varieties) for (const im of v.insts) {
-      im.instanceMatrix.needsUpdate = true;
-      im.matrixAutoUpdate = false; im.updateMatrix();
-      scene.add(im); ownedInstanced.push(im);
+
+    for (const s of SPECIES) {
+      if (!s._n) continue;
+      s._trunks.instanceMatrix.needsUpdate = true;
+      s._cards.instanceMatrix.needsUpdate = true;
+      s._cards.instanceColor.needsUpdate = true;
+      s._trunks.matrixAutoUpdate = false; s._trunks.updateMatrix();
+      s._cards.matrixAutoUpdate = false; s._cards.updateMatrix();
+      scene.add(s._trunks); scene.add(s._cards);
+      ownedInstanced.push(s._trunks, s._cards);
     }
-    return true;
   }
 
   // ── Runtime state shared between the async build and the API/loop ─────────
@@ -406,6 +547,25 @@ export function createVeyraWorld(container, opts) {
   // disabled: they had no collision so the player walked straight through them.
   // The perimeter/gate guards (liveGuards) are functional and stay.
   const SHOW_CITY_NPCS = false;
+
+  // ── Multiplayer presence + shared bench seating ──────────────────────────
+  // Real players (signed-in + guests) appear here, synced via the realtime layer
+  // that WorldScreen wires in. The engine renders REMOTE avatars from snapshots
+  // and reports the LOCAL transform out each tick; seat claims are arbitrated by
+  // the server. All of this is inert (single-player) if no realtime opts are set.
+  const SELF_ID = opts.selfId || null;
+  const remotePlayers = new Map();   // id -> { av, group, parts, tx,tz,tRotY, anim, seatId, tag, last }
+  let socialBenches = [];            // canonical sittable benches (cross-client stable)
+  const seatById = new Map();        // seatId -> { x, z, rotY }
+  let occupiedRemote = new Set();    // seatIds held by OTHER players (from snapshot)
+  let localSeatId = null;            // the seat this client currently sits in
+  let pendingSeatId = null;          // a claim awaiting server grant
+  let sitting = false;               // local player is seated
+  let nearestFreeSeatId = null;      // nearest sittable seat for the prompt
+  let lastSitSig = '';               // change-detector for opts.onSit
+  const SEAT_Y = 0.46;               // avatar lift when sitting on a bench
+  const SIT_REACH = 2.2;             // how close to a seat to offer "sit"
+
   // Tree foliage wind-sway uniforms (bound in build() onBeforeCompile).
   const swayUniforms = { uTime: { value: 0 }, uWind: { value: 0 }, uWindDir: { value: 0 } };
 
@@ -482,8 +642,13 @@ export function createVeyraWorld(container, opts) {
     // (y=0.03) so the street network draws cleanly over any overlap.
     const greenList = (data && data.greens) ? data.greens : [];
     if (greenList.length) {
-      const lawnMat = new THREE.MeshStandardMaterial({ color: hsl(104, 0.34, 0.36), roughness: 1, metalness: 0 });
-      const pitchMat = new THREE.MeshStandardMaterial({ color: hsl(128, 0.40, 0.32), roughness: 1, metalness: 0 });
+      // Tileable procedural grass albedo. ShapeGeometry UVs equal the shape's metre
+      // coordinates, so a RepeatWrapping map with repeat = 1/tileMetres tiles cleanly
+      // across every park patch. color stays near-white so the texture's own greens
+      // (and blade detail) read true; pitch gets a cooler turf tint.
+      const grassTex = makeGrassTexture(); grassTex.repeat.set(0.3, 0.3); ownedTextures.push(grassTex);
+      const lawnMat = new THREE.MeshStandardMaterial({ color: hsl(96, 0.12, 0.66), roughness: 1, metalness: 0, map: grassTex });
+      const pitchMat = new THREE.MeshStandardMaterial({ color: hsl(128, 0.22, 0.6), roughness: 1, metalness: 0, map: grassTex });
       // polygonOffset so the greens never z-fight against the ground beneath them.
       lawnMat.polygonOffset = true; lawnMat.polygonOffsetFactor = -1; lawnMat.polygonOffsetUnits = -1;
       pitchMat.polygonOffset = true; pitchMat.polygonOffsetFactor = -1; pitchMat.polygonOffsetUnits = -1;
@@ -499,7 +664,7 @@ export function createVeyraWorld(container, opts) {
         try { pg = new THREE.ShapeGeometry(shp); } catch (_) { continue; }
         if (!pg.attributes.position || pg.attributes.position.count < 3) { pg.dispose(); continue; }
         pg.rotateX(-Math.PI / 2);
-        pg.deleteAttribute('uv');
+        // Keep the UVs (= metre coords) so the tiling grass map lands seamlessly.
         (gr.kind === 'pitch' ? pitchGeoms : lawnGeoms).push(pg);
       }
       const addGreen = (list, mat) => {
@@ -953,22 +1118,14 @@ export function createVeyraWorld(container, opts) {
     // ─────────────── STREET LIFE — Hanoi items along the roads ────────────
     scatterItems(roadList, buildList, lakeCx, lakeCz, lakeNorthZ, lakeR);
 
-    // ───────────────────── TREES — ~832 real positions ───────────────────
-    // Every real tree position becomes ONE instance in just TWO InstancedMeshes —
-    // one for trunks, one for foliage blobs — so all 832 trees cost ~2 draw calls.
-    // Per instance: varied height/scale, random Y-rotation, slight foliage tint
-    // variation. NO collision (trees are thin → streets stay walkable). Shadows
-    // only on the high tier (and only near the core), off on mid/low for the budget.
+    // ───────────────────── TREES — REAL OSM positions ────────────────────
+    // Use the real tree coordinates VERBATIM so the greenery sits exactly where it
+    // does in Hoan Kiem (the lakeside rows, the boulevard lines, the courtyard trees)
+    // — placed the same data-driven way as the buildings and roads. The realistic
+    // alpha-card trees are a single InstancedMesh pair, so the whole ~832-tree set is
+    // cheap; only the LOW tier trims to the nearest-to-lake for the GPU budget.
     let treeList = (data && data.trees) ? data.trees : [];
-    // Hoan Kiem reads as a tree-LINED SHORE, not a forest. Keep trees in a band
-    // hugging the lake (the real perimeter rows + the boulevards that ring it);
-    // beyond that band keep only a sparse scatter so distant streets aren't bare.
-    const shoreBand = lakeR + 110;
-    treeList = treeList.filter((t) => {
-      const d = Math.hypot(t[0] - lakeCx, t[1] - lakeCz);
-      return d < shoreBand || hash01(t[0] * 0.7, t[1] * 0.7) < 0.22;
-    });
-    const treeCap = q.tier === 'low' ? 110 : q.tier === 'mid' ? 220 : 360;
+    const treeCap = q.tier === 'low' ? 450 : Infinity;   // hi/mid: every real tree
     if (treeList.length > treeCap) {
       treeList = treeList
         .map((t) => ({ t, d: (t[0] - lakeCx) ** 2 + (t[1] - lakeCz) ** 2 }))
@@ -977,70 +1134,9 @@ export function createVeyraWorld(container, opts) {
         .map((e) => e.t);
     }
     if (treeList.length) {
-     const castShadowsT = q.tier === 'high';
-     const readyTreeUrls = TREE_GLBS.filter((u) => kit.hasUrl(u));
-     const builtGlbTrees = readyTreeUrls.length ? buildGltfTrees(treeList, readyTreeUrls, castShadowsT) : false;
-     if (!builtGlbTrees) {
-      const trunkGeo = new THREE.CylinderGeometry(0.16, 0.26, 1, 6).translate(0, 0.5, 0); // unit-height, base at 0
-      const foliageGeo = new THREE.IcosahedronGeometry(1, 1);
-      ownedGeoms.push(trunkGeo, foliageGeo);
-      // dedicated foliage material; per-instance tint comes from setColorAt below
-      // (InstancedMesh.instanceColor — no vertexColors flag needed).
-      const treeFoliageMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.92, metalness: 0, flatShading: true });
-      localMats.push(treeFoliageMat);
-      // Wind sway: displace foliage verts along the wind direction, stronger
-      // toward the top, phased per-instance. Near-free (one vertex add); ties to
-      // the real wind via swayUniforms (driven each frame).
-      treeFoliageMat.onBeforeCompile = (shader) => {
-        shader.uniforms.uTime = swayUniforms.uTime;
-        shader.uniforms.uWind = swayUniforms.uWind;
-        shader.uniforms.uWindDir = swayUniforms.uWindDir;
-        shader.vertexShader = 'uniform float uTime;\nuniform float uWind;\nuniform float uWindDir;\n' + shader.vertexShader;
-        shader.vertexShader = shader.vertexShader.replace(
-          '#include <begin_vertex>',
-          `#include <begin_vertex>
-           float swayPhase = instanceMatrix[3].x * 0.15 + instanceMatrix[3].z * 0.15;
-           float swayAmt = sin(uTime * 1.6 + swayPhase) * (0.06 + uWind * 0.22);
-           transformed.x += cos(uWindDir) * swayAmt * (position.y * 0.5 + 0.5);
-           transformed.z += sin(uWindDir) * swayAmt * (position.y * 0.5 + 0.5);`,
-        );
-      };
-      const trunks = new THREE.InstancedMesh(trunkGeo, mats.bark, treeList.length);
-      const foliage = new THREE.InstancedMesh(foliageGeo, treeFoliageMat, treeList.length);
-      const castShadows = q.tier === 'high';
-      trunks.castShadow = castShadows; trunks.receiveShadow = false;
-      foliage.castShadow = castShadows; foliage.receiveShadow = false;
-      const m = new THREE.Matrix4(), qrot = new THREE.Quaternion(), pos = new THREE.Vector3(), scl = new THREE.Vector3();
-      const up = new THREE.Vector3(0, 1, 0), col = new THREE.Color();
-      for (let i = 0; i < treeList.length; i++) {
-        const tx = treeList[i][0], tz = treeList[i][1];
-        circles.push({ x: tx, z: tz, r: 0.5 });   // trunk collision (walk under the canopy, not through)
-        const r1 = hash01(tx + 1.7, tz - 2.3), r2 = hash01(tz * 1.3, tx * 0.7), r3 = hash01(tx * 2.1 + 5, tz);
-        const height = 3.5 + r1 * 3.5;                 // ~3.5..7 m
-        const trunkH = height * 0.45;
-        const canopyR = 1.3 + r2 * 1.1;                // foliage blob radius
-        const yaw = r3 * Math.PI * 2;
-        qrot.setFromAxisAngle(up, yaw);
-        // trunk: unit-height cylinder scaled to trunkH, slight radius variation
-        pos.set(tx, 0, tz); scl.set(0.8 + r2 * 0.5, trunkH, 0.8 + r2 * 0.5);
-        m.compose(pos, qrot, scl); trunks.setMatrixAt(i, m);
-        // foliage blob centred near the top of the trunk
-        pos.set(tx, trunkH + canopyR * 0.55, tz);
-        scl.set(canopyR, canopyR * (0.85 + r1 * 0.3), canopyR);
-        m.compose(pos, qrot, scl); foliage.setMatrixAt(i, m);
-        // slight per-tree hue/lightness variation so the canopy isn't uniform
-        col.setHSL((100 + r3 * 24) / 360, 0.34, 0.28 + r2 * 0.12);
-        foliage.setColorAt(i, col);
-      }
-      trunks.instanceMatrix.needsUpdate = true;
-      foliage.instanceMatrix.needsUpdate = true;
-      if (foliage.instanceColor) foliage.instanceColor.needsUpdate = true;
-      // static — no per-frame matrix recompute
-      trunks.matrixAutoUpdate = false; trunks.updateMatrix();
-      foliage.matrixAutoUpdate = false; foliage.updateMatrix();
-      scene.add(trunks); scene.add(foliage);
-      ownedInstanced.push(trunks, foliage);
-     }
+      // Realistic MULTI-SPECIES trees (broadleaf, slender, flowering, palm) — each
+      // species owns its foliage texture/material (freed in dispose()).
+      buildRealisticTrees(treeList, q.tier === 'high');
     }
 
     // ──────────────────────── LANDMARKS at the lake ──────────────────────
@@ -1049,6 +1145,7 @@ export function createVeyraWorld(container, opts) {
     buildTurtleTower(lakeCx, lakeCz);
     buildBridgeAndTemple(lakeCx, lakeCz, lakeNorthZ);
     buildHoanKiemMonuments(lakeCx, lakeCz, lakeNorthZ, lakeR);
+    buildPublicLandmarks(lakeCx, lakeCz, lakeNorthZ, lakeR);
 
     // ───────────────── SHOPS — on real buildings fronting the north shore ──
     // Pick the buildings closest to the lake's north water edge and attach the
@@ -1076,6 +1173,10 @@ export function createVeyraWorld(container, opts) {
 
     // ─────────────── Promenade dressing: lamps + a few benches ────────────
     dressPromenade(lakePoly, lakeCx, lakeCz);
+
+    // Canonical, sittable benches (multiplayer seat slots) — tier-independent so
+    // every client agrees on positions + seat ids.
+    buildSeating(lakeCx, lakeCz, lakeR);
 
     // ─────────────── Lakeside lantern string (warm emissive at dusk) ──────
     const lanternP = [];
@@ -1228,6 +1329,7 @@ export function createVeyraWorld(container, opts) {
   // players OUTSIDE this fence and only open a gate once the ticket checks out.
   const fenceGates = [];   // { key, label, a, x, z, hue } — used by later phases
   const shopDoors = [];    // { x, z, leaves, openT } — entrance doors that auto-open on approach
+  const landmarks = [];    // { ranges, openT, leaves, glowMats, lights, signOpen, signClosed, clock } — real-time public buildings
   function makeLabelTexture(text, hue) {
     const cv = document.createElement('canvas'); cv.width = 256; cv.height = 128;
     const cx = cv.getContext('2d');
@@ -1269,6 +1371,140 @@ export function createVeyraWorld(container, opts) {
     nameTag.position.set(0, 2.25, 0);
     nameTag.material.depthTest = false; nameTag.renderOrder = 12;
     player.group.add(nameTag);
+  }
+
+  // ── Sit pose (shared by local + remote avatars) ──────────────────────────
+  // POSE only — thighs rotate forward at the hip, arms rest, torso upright. The
+  // seat-height LIFT is applied by the caller (local via the targetY follow,
+  // remote via the position lerp) so it isn't snapped here.
+  function applySitPose(parts, _group, on) {
+    if (on) {
+      parts.legL.rotation.x = -Math.PI / 2; parts.legR.rotation.x = -Math.PI / 2;
+      parts.armL.rotation.x = -0.5; parts.armR.rotation.x = -0.5;
+      parts.torso.position.y = 1.0;
+    } else {
+      parts.legL.rotation.x = 0; parts.legR.rotation.x = 0;
+      parts.armL.rotation.x = 0; parts.armR.rotation.x = 0;
+      parts.torso.position.y = 1.05;
+    }
+  }
+
+  // ── Remote players ───────────────────────────────────────────────────────
+  function makeRemote(state) {
+    const av = buildAvatar({ hue: state.hue, style: state.style });
+    av.group.position.set(state.x, 0, state.z);
+    av.group.rotation.y = state.rotY || 0;
+    scene.add(av.group);
+    const tag = state.name ? makeTag(state.name, 'rgba(120,180,255,0.97)') : null;
+    if (tag) { tag.scale.set(2.6, 0.66, 1); tag.position.set(0, 2.2, 0); tag.material.depthTest = false; tag.renderOrder = 12; av.group.add(tag); }
+    const r = {
+      av, group: av.group, parts: av.parts, tag,
+      tx: state.x, tz: state.z, tRotY: state.rotY || 0,
+      anim: state.anim || 'idle', seatId: state.seatId || null,
+      phase: Math.random() * 6.28, last: performance.now(),
+    };
+    remotePlayers.set(state.id, r);
+    return r;
+  }
+  function disposeRemote(id) {
+    const r = remotePlayers.get(id); if (!r) return;
+    scene.remove(r.group);
+    r.group.traverse((o) => { if (o.isMesh) { o.geometry && o.geometry.dispose && o.geometry.dispose(); } });
+    if (r.av && r.av.mats) for (const k in r.av.mats) { const m = r.av.mats[k]; m && m.dispose && m.dispose(); }
+    remotePlayers.delete(id);
+  }
+  // Apply a fresh world snapshot: upsert every remote, retarget transforms.
+  function applySnapshot(states) {
+    if (!Array.isArray(states)) return;
+    const now = performance.now();
+    occupiedRemote = occupiedSeats(states, SELF_ID || '');
+    for (const s of states) {
+      if (!s || typeof s.id !== 'string') continue;
+      if (SELF_ID && s.id === SELF_ID) continue;   // never render ourselves
+      let r = remotePlayers.get(s.id);
+      if (!r) r = makeRemote(s);
+      r.tx = s.x; r.tz = s.z; r.tRotY = s.rotY || 0;
+      r.anim = s.anim || 'idle'; r.seatId = s.seatId || null;
+      r.last = now;
+    }
+  }
+  function playerLeft(id) { disposeRemote(id); }
+  // Per-frame: interpolate remote avatars toward their targets + pose them.
+  function updateRemotes(dt, t) {
+    const now = performance.now();
+    for (const [id, r] of remotePlayers) {
+      if (now - r.last > 5000) { disposeRemote(id); continue; }   // stale → drop
+      let gx = r.tx, gz = r.tz, gy = 0, gRotY = r.tRotY;
+      const seated = !!r.seatId && seatById.has(r.seatId);
+      if (seated) { const st = seatById.get(r.seatId); gx = st.x; gz = st.z; gy = SEAT_Y; gRotY = st.rotY; }
+      const g = r.group;
+      g.position.x += (gx - g.position.x) * Math.min(1, dt * 10);
+      g.position.z += (gz - g.position.z) * Math.min(1, dt * 10);
+      g.position.y += (gy - g.position.y) * Math.min(1, dt * 10);
+      let dy = ((gRotY - g.rotation.y + Math.PI) % (Math.PI * 2)) - Math.PI;
+      g.rotation.y += dy * Math.min(1, dt * 10);
+      if (seated) { applySitPose(r.parts, g, true); }
+      else {
+        applySitPose(r.parts, g, false);
+        const mv = r.anim === 'walk';
+        r.phase += dt * (mv ? 10 : 0);
+        const sw = mv ? 0.6 : 0;
+        const ez = (p, v) => p.rotation.x += (v - p.rotation.x) * Math.min(1, dt * 12);
+        ez(r.parts.legL, Math.sin(r.phase) * sw); ez(r.parts.legR, -Math.sin(r.phase) * sw);
+        ez(r.parts.armL, -Math.sin(r.phase) * sw * 0.7); ez(r.parts.armR, Math.sin(r.phase) * sw * 0.7);
+      }
+      if (r.tag) r.tag.quaternion.copy(camera.quaternion);
+    }
+  }
+
+  // ── Seating (local player) ───────────────────────────────────────────────
+  // Build the canonical sittable benches from the (shared) lake geometry, render
+  // them with collision, and register every seat anchor.
+  function buildSeating(lakeCx, lakeCz, lakeR) {
+    socialBenches = buildSocialBenches(lakeCx, lakeCz, lakeR);
+    for (const b of socialBenches) {
+      const g = props.bench();
+      g.position.set(b.x, 0, b.z); g.rotation.y = b.rotY;
+      g.matrixAutoUpdate = false; g.updateMatrix();
+      scene.add(g); itemGroups.push(g);
+      circles.push({ x: b.x, z: b.z, r: 1.0 });   // collision so you can't walk through
+      for (const s of benchSlots(b)) seatById.set(s.seatId, { x: s.x, z: s.z, rotY: s.rotY });
+    }
+  }
+  // Nearest free seat (not held by another player, not our own) within reach.
+  function findNearestFreeSeat(px, pz) {
+    let best = null, bestD = SIT_REACH;
+    for (const [seatId, st] of seatById) {
+      if (occupiedRemote.has(seatId)) continue;
+      const d = Math.hypot(px - st.x, pz - st.z);
+      if (d < bestD) { bestD = d; best = seatId; }
+    }
+    return best;
+  }
+  function requestSit() {
+    if (sitting || !player) return;
+    const seatId = findNearestFreeSeat(player.group.position.x, player.group.position.z);
+    if (!seatId) return;
+    pendingSeatId = seatId;
+    if (opts.claimSeat) opts.claimSeat(seatId);
+    else seatGranted(seatId);   // offline / no realtime → grant locally
+  }
+  function requestStand() {
+    if (!sitting) return;
+    sitting = false; localSeatId = null;
+    applySitPose(player.parts, player.group, false);
+    if (opts.releaseSeat) opts.releaseSeat();
+  }
+  function seatGranted(seatId) {
+    if (seatId !== pendingSeatId) return;   // only honour the seat we asked for
+    pendingSeatId = null;
+    const st = seatById.get(seatId); if (!st) return;
+    localSeatId = seatId; sitting = true;
+    player.group.position.x = st.x; player.group.position.z = st.z;
+    player.group.rotation.y = st.rotY;
+  }
+  function seatDenied(seatId) {
+    if (seatId === pendingSeatId) pendingSeatId = null;
   }
   function buildFenceAndGates() {
     const gated = !opts.authed;               // guests face closed gates until a ticket clears
@@ -1498,6 +1734,212 @@ export function createVeyraWorld(container, opts) {
 
   // ════════════════════════ Landmark builders ═══════════════════════════════
 
+  // ── Real-time "open to the public" helpers (shared by the landmarks below) ──
+  // Is the current Hanoi hour within any [start,end) range?
+  function isOpenNow(ranges) {
+    const hr = hanoiHour();
+    return ranges.some(([a, b]) => hr >= a && hr < b);
+  }
+  // Warm window-glow material — emissiveIntensity is driven 0→base by the open state.
+  function glowMat(hue, baseEmissive) {
+    const m = new THREE.MeshStandardMaterial({
+      color: hsl(hue, 0.5, 0.66), emissive: new THREE.Color(hsl(hue, 0.75, 0.6)),
+      emissiveIntensity: 0, roughness: 0.5, metalness: 0,
+    });
+    m.userData.baseEmissive = baseEmissive != null ? baseEmissive : 1.2;
+    localMats.push(m);
+    return m;
+  }
+  // "MỞ CỬA" (green) / "ĐÓNG CỬA" (red) status boards, added to `parent` at a local
+  // offset. Toggled by the frame loop. Returns { signOpen, signClosed }.
+  function statusSigns(parent, lx, ly, lz) {
+    const so = mats.makeSign('MỞ CỬA', { width: 2.0, bg: '#1c7d3e' });
+    const sc = mats.makeSign('ĐÓNG CỬA', { width: 2.0, bg: '#b62a1e' });
+    [so, sc].forEach((s) => { s.position.set(lx, ly, lz); parent.add(s); });
+    return { signOpen: so, signClosed: sc };
+  }
+  // Two hinged leaves filling an opening width `w`/height `h`, centred at local
+  // (cx,0,cz) on a +z-facing wall of `parent`. Leaves swing outward to +z when open.
+  function addDoubleDoor(parent, cx, cz, w, h, leafMat) {
+    const half = w / 2, leafW = half - 0.04, hY = h / 2;
+    const out = [];
+    for (const sgn of [-1, 1]) {
+      const hinge = new THREE.Group();
+      hinge.position.set(cx + sgn * half, 0, cz);
+      const leaf = new THREE.Mesh(new THREE.BoxGeometry(leafW, h, 0.1), leafMat);
+      leaf.position.set(-sgn * leafW / 2, hY, 0); leaf.castShadow = true; hinge.add(leaf);
+      ownedGeoms.push(leaf.geometry); parent.add(hinge);
+      out.push({ grp: hinge, openYaw: sgn * Math.PI / 2 });   // left −90°, right +90°
+    }
+    return out;
+  }
+  // Register a landmark handle: snap it to the CURRENT open state (so the world
+  // loads correctly), then the frame loop animates transitions.
+  function registerLandmark(h) {
+    h.openT = isOpenNow(h.ranges) ? 1 : 0;
+    for (const lf of h.leaves || []) lf.grp.rotation.y = lf.openYaw * h.openT;
+    for (const gm of h.glowMats || []) gm.emissiveIntensity = h.openT * gm.userData.baseEmissive;
+    for (const li of h.lights || []) li.intensity = h.openT * li.userData.baseInt;
+    if (h.signOpen) h.signOpen.visible = h.openT > 0.5;
+    if (h.signClosed) h.signClosed.visible = h.openT <= 0.5;
+    landmarks.push(h);
+  }
+
+  // ── Iconic Hanoi public buildings that open/close with real Hanoi time ──────
+  // Higher-detail than the stone monuments; placed on the promenade ring facing
+  // the lake (avoids the OSM footprints inland). Visual open state only.
+  function buildPublicLandmarks(lakeCx, lakeCz, northZ, lakeR) {
+    const withLight = q.tier !== 'low';
+    // Shared local palette.
+    const granite = new THREE.MeshStandardMaterial({ color: hsl(40, 0.04, 0.6), roughness: 0.92, metalness: 0 });
+    const white = new THREE.MeshStandardMaterial({ color: hsl(42, 0.06, 0.84), roughness: 0.85, metalness: 0 });
+    const slate = new THREE.MeshStandardMaterial({ color: hsl(220, 0.05, 0.32), roughness: 0.8, metalness: 0.05 });
+    const gilt = new THREE.MeshStandardMaterial({ color: hsl(45, 0.6, 0.55), roughness: 0.4, metalness: 0.7 });
+    const yellow = mats.plaster(46);          // ochre French-colonial facade (cached/shared)
+    const paleY = mats.plaster(42);
+    localMats.push(granite, white, slate, gilt);
+
+    const bx = (parent, mat, w, h, d, x, y, z) => {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+      m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true; parent.add(m);
+      ownedGeoms.push(m.geometry); return m;
+    };
+    const placeFacingLake = (x, z) => {
+      const g = new THREE.Group(); g.position.set(x, 0, z);
+      g.rotation.y = Math.atan2(lakeCx - x, lakeCz - z);   // local +z faces the lake
+      scene.add(g); return g;
+    };
+    const warmLight = (g, y, dist) => {
+      if (!withLight) return [];
+      const pl = new THREE.PointLight(0xffd9a0, 0, dist, 2.0);
+      pl.position.set(0, y, 0.5); pl.userData.baseInt = 14; g.add(pl); return [pl];
+    };
+
+    // ── ĐỀN — already built; here the THREE NEW French/Gothic landmarks. ──
+
+    // 1) NHÀ THỜ LỚN — neo-Gothic cathedral, twin square bell towers (WEST shore).
+    (function cathedral() {
+      const g = placeFacingLake(lakeCx - (lakeR + 24), lakeCz - 4);
+      const naveW = 9, naveH = 11, naveD = 16;
+      bx(g, granite, naveW, naveH, naveD, 0, naveH / 2, -naveD / 2 - 1);   // nave
+      // Gable + steep roof.
+      bx(g, slate, naveW + 0.4, 0.5, naveD, 0, naveH + 0.2, -naveD / 2 - 1);
+      const gw = glowMat(40, 1.6);                                          // shared window glow
+      // Rose window (glowing disc on the facade).
+      const rose = new THREE.Mesh(new THREE.CircleGeometry(1.5, 24), gw);
+      rose.position.set(0, naveH - 2.2, 0.06); g.add(rose); ownedGeoms.push(rose.geometry);
+      // Twin square bell towers flanking the facade.
+      const towerH = 16, tw = 3.2;
+      for (const sgn of [-1, 1]) {
+        const tx = sgn * (naveW / 2 + tw / 2 - 0.2);
+        bx(g, granite, tw, towerH, tw, tx, towerH / 2, 0.2);
+        // Belfry louvre (glowing) + a stepped cap + a spirelet.
+        bx(g, gw, tw * 0.5, 2.2, tw * 0.5, tx, towerH - 3.2, tw / 2 + 0.18);
+        bx(g, white, tw + 0.5, 0.5, tw + 0.5, tx, towerH + 0.25, 0.2);
+        const spire = new THREE.Mesh(new THREE.ConeGeometry(tw * 0.62, 3.2, 4), slate);
+        spire.position.set(tx, towerH + 1.9, 0.2); spire.rotation.y = Math.PI / 4; spire.castShadow = true; g.add(spire); ownedGeoms.push(spire.geometry);
+        const cross = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.0, 0.12), gilt);
+        cross.position.set(tx, towerH + 3.9, 0.2); g.add(cross); ownedGeoms.push(cross.geometry);
+        bx(g, gilt, 0.6, 0.12, 0.12, tx, towerH + 3.95, 0.2);
+      }
+      // Lancet windows down the nave sides (glowing).
+      for (let i = 0; i < 4; i++) {
+        const z = -3 - i * 3;
+        for (const sgn of [-1, 1]) bx(g, gw, 0.1, 3.2, 0.9, sgn * (naveW / 2 + 0.02), 4.2, z);
+      }
+      // Pointed-arch portal + double doors.
+      bx(g, white, 3.4, 0.4, 0.3, 0, 4.6, 0.18);
+      const arch = new THREE.Mesh(new THREE.ConeGeometry(1.7, 1.6, 3), white);
+      arch.position.set(0, 5.4, 0.18); arch.rotation.y = Math.PI / 2; g.add(arch); ownedGeoms.push(arch.geometry);
+      const leaves = addDoubleDoor(g, 0, 0.12, 2.8, 4.4, darkWood);
+      const lights = warmLight(g, 5, 26);
+      const sg = statusSigns(g, naveW / 2 + 1.4, 2.6, 0.6);
+      circles.push({ x: g.position.x, z: g.position.z - 8, r: 9 });
+      registerLandmark({ ranges: [[8, 20]], leaves, glowMats: [gw], lights, ...sg });
+    })();
+
+    // 2) NHÀ HÁT LỚN — Opera House: yellow facade, Ionic portico, central dome (SE).
+    (function opera() {
+      const off = (lakeR + 22) * 0.72;
+      const g = placeFacingLake(lakeCx + off, lakeCz + off);
+      const bodyW = 16, bodyH = 10, bodyD = 13;
+      bx(g, yellow, bodyW, bodyH, bodyD, 0, bodyH / 2, -bodyD / 2 - 1.4);
+      // Grey mansard cap.
+      bx(g, slate, bodyW + 0.6, 1.6, bodyD + 0.4, 0, bodyH + 0.8, -bodyD / 2 - 1.4);
+      // Central dome on a drum.
+      const drum = new THREE.Mesh(new THREE.CylinderGeometry(3, 3.3, 1.8, 20), white);
+      drum.position.set(0, bodyH + 1.7, -bodyD / 2 - 1.4); drum.castShadow = true; g.add(drum); ownedGeoms.push(drum.geometry);
+      const dome = new THREE.Mesh(new THREE.SphereGeometry(3, 20, 12, 0, Math.PI * 2, 0, Math.PI / 2), slate);
+      dome.position.set(0, bodyH + 2.6, -bodyD / 2 - 1.4); dome.castShadow = true; g.add(dome); ownedGeoms.push(dome.geometry);
+      const lantern = new THREE.Mesh(new THREE.ConeGeometry(0.6, 1.4, 8), gilt);
+      lantern.position.set(0, bodyH + 6.0, -bodyD / 2 - 1.4); g.add(lantern); ownedGeoms.push(lantern.geometry);
+      // Portico: 6 Ionic columns + entablature + pediment.
+      const colY = 7, nCol = 6;
+      for (let i = 0; i < nCol; i++) {
+        const cx = -6 + (12 * i) / (nCol - 1);
+        const col = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.46, colY, 14), white);
+        col.position.set(cx, colY / 2, 1.4); col.castShadow = true; g.add(col); ownedGeoms.push(col.geometry);
+        bx(g, white, 1.1, 0.4, 0.6, cx, colY + 0.2, 1.4);    // capital
+      }
+      bx(g, white, 13, 0.9, 1.0, 0, colY + 0.8, 1.4);          // entablature
+      const ped = new THREE.Mesh(new THREE.ConeGeometry(7, 1.6, 3), white);
+      ped.rotation.y = Math.PI / 2; ped.position.set(0, colY + 2.1, 1.2); g.add(ped); ownedGeoms.push(ped.geometry);
+      bx(g, white, 13, 0.18, 1.4, 0, colY + 1.0, 1.4);         // balcony slab over portico
+      // Arched glowing windows across the facade upper storey.
+      const gw = glowMat(45, 1.4);
+      for (let i = 0; i < 5; i++) {
+        const cx = -6 + (12 * i) / 4;
+        bx(g, gw, 1.2, 2.0, 0.1, cx, 6.6, 0.02);
+      }
+      // Grand doors behind the portico.
+      const leaves = addDoubleDoor(g, 0, 0.12, 3.0, 4.6, darkWood);
+      const lights = warmLight(g, 5, 30);
+      const sg = statusSigns(g, bodyW / 2 - 0.6, 2.6, 1.6);
+      circles.push({ x: g.position.x, z: g.position.z - 7, r: 10 });
+      // Tours 10:30–12:00 + evening performances 18:00–22:00.
+      registerLandmark({ ranges: [[10.5, 12], [18, 22]], leaves, glowMats: [gw], lights, ...sg });
+    })();
+
+    // 3) BƯU ĐIỆN BỜ HỒ — Post Office with a live real-time clock tower (EAST shore).
+    (function postOffice() {
+      const g = placeFacingLake(lakeCx + (lakeR + 18), lakeCz - lakeR * 0.5);
+      const bodyW = 15, bodyH = 8, bodyD = 10;
+      bx(g, paleY, bodyW, bodyH, bodyD, 0, bodyH / 2, -bodyD / 2 - 1.2);
+      bx(g, redPaint, bodyW + 0.6, 0.5, bodyD + 0.4, 0, bodyH + 0.2, -bodyD / 2 - 1.2);   // red-tile cornice
+      // Central clock tower.
+      const twW = 4.2, twH = 7, twBaseY = bodyH;
+      bx(g, paleY, twW, twH, twW, 0, twBaseY + twH / 2, -0.6);
+      const towerRoof = new THREE.Mesh(new THREE.ConeGeometry(twW * 0.78, 2.6, 4), redPaint);
+      towerRoof.rotation.y = Math.PI / 4; towerRoof.position.set(0, twBaseY + twH + 1.1, -0.6); towerRoof.castShadow = true; g.add(towerRoof); ownedGeoms.push(towerRoof.geometry);
+      // Clock face + two hands (driven by real Hanoi time in the frame loop).
+      const faceZ = twW / 2 - 0.6 + 0.06, faceY = twBaseY + twH * 0.6;
+      const face = new THREE.Mesh(new THREE.CircleGeometry(1.3, 28), white);
+      face.position.set(0, faceY, faceZ); g.add(face); ownedGeoms.push(face.geometry);
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(1.3, 0.1, 8, 28), gilt);
+      ring.position.set(0, faceY, faceZ); g.add(ring); ownedGeoms.push(ring.geometry);
+      const mkHand = (len, wdt) => {
+        const pivot = new THREE.Group(); pivot.position.set(0, faceY, faceZ + 0.04);
+        const hand = new THREE.Mesh(new THREE.BoxGeometry(wdt, len, 0.05), slate);
+        hand.position.set(0, len / 2 - 0.1, 0); pivot.add(hand); ownedGeoms.push(hand.geometry);
+        g.add(pivot); return pivot;
+      };
+      const clock = { hour: mkHand(0.75, 0.1), minute: mkHand(1.1, 0.07) };
+      // Arched glowing windows (ground storey).
+      const gw = glowMat(45, 1.3);
+      for (let i = 0; i < 6; i++) {
+        const cx = -6 + (12 * i) / 5;
+        bx(g, gw, 1.1, 1.8, 0.1, cx, 3.0, 0.02);
+      }
+      const nameSign = mats.makeSign('BƯU ĐIỆN HÀ NỘI', { width: 6.0, bg: '#143e6e' });
+      nameSign.position.set(0, bodyH - 1.0, 0.1); g.add(nameSign);
+      const leaves = addDoubleDoor(g, 0, 0.12, 3.0, 4.0, darkWood);
+      const lights = warmLight(g, 4, 28);
+      const sg = statusSigns(g, bodyW / 2 - 0.6, 2.6, 0.6);
+      circles.push({ x: g.position.x, z: g.position.z - 6, r: 9 });
+      registerLandmark({ ranges: [[7.5, 21]], leaves, glowMats: [gw], lights, clock, ...sg });
+    })();
+  }
+
   // THÁP RÙA — Turtle Tower on a small island at the lake centre.
   function buildTurtleTower(ox, oz) {
     const g = new THREE.Group(); g.position.set(ox, 0, oz); scene.add(g);
@@ -1616,10 +2058,35 @@ export function createVeyraWorld(container, opts) {
       const bodyW = 6.5, bodyD = 5.0, bodyH = 3.6;
       const body = new THREE.Mesh(new THREE.BoxGeometry(bodyW, bodyH, bodyD), wallMat);
       body.position.y = bodyH / 2; body.castShadow = true; body.receiveShadow = true; t.add(body);
-      const door = new THREE.Mesh(new THREE.BoxGeometry(1.8, 2.4, 0.18), darkWood);
-      door.position.set(0, 1.2, -bodyD / 2 - 0.02); t.add(door);
+      // Hinged temple doors that swing open (toward the bridge, −Z) during hours.
+      const tDoorLeaves = [];
+      {
+        const dw = 1.9, dh = 2.5, dhalf = dw / 2, leafW = dhalf - 0.04;
+        for (const sgn of [-1, 1]) {
+          const hinge = new THREE.Group();
+          hinge.position.set(sgn * dhalf, 0, -bodyD / 2 - 0.02);
+          const leaf = new THREE.Mesh(new THREE.BoxGeometry(leafW, dh, 0.12), darkWood);
+          leaf.position.set(-sgn * leafW / 2, dh / 2, 0); leaf.castShadow = true; hinge.add(leaf);
+          ownedGeoms.push(leaf.geometry); t.add(hinge);
+          tDoorLeaves.push({ grp: hinge, openYaw: -sgn * Math.PI / 2 });   // swing to −Z (toward bridge)
+        }
+      }
       const doorFrame = new THREE.Mesh(new THREE.BoxGeometry(2.2, 2.7, 0.1), redPaint);
       doorFrame.position.set(0, 1.35, -bodyD / 2 - 0.06); t.add(doorFrame);
+      // Lantern-lit windows flanking the door (glow while open) + status sign + light.
+      const tGlow = glowMat(38, 1.5);
+      [-1, 1].forEach((sgn) => {
+        const win = new THREE.Mesh(new THREE.BoxGeometry(0.9, 1.4, 0.1), tGlow);
+        win.position.set(sgn * 2.0, 1.7, -bodyD / 2 - 0.01); t.add(win); ownedGeoms.push(win.geometry);
+      });
+      const tSg = statusSigns(t, 2.7, 2.7, -bodyD / 2 - 0.12);
+      tSg.signOpen.rotation.y = Math.PI; tSg.signClosed.rotation.y = Math.PI;   // face the bridge (−Z)
+      let tLights = [];
+      if (q.tier !== 'low') {
+        const pl = new THREE.PointLight(0xffe0b0, 0, 18, 2.0);
+        pl.position.set(0, 2.4, 0); pl.userData.baseInt = 9; t.add(pl); tLights = [pl];
+      }
+      registerLandmark({ ranges: [[7, 18]], leaves: tDoorLeaves, glowMats: [tGlow], lights: tLights, signOpen: tSg.signOpen, signClosed: tSg.signClosed });
       [-1, 1].forEach((sd) => {
         const col = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.24, bodyH, 12), redPaint);
         col.position.set(sd * (bodyW / 2 - 0.5), bodyH / 2, -bodyD / 2 + 0.1); col.castShadow = true; t.add(col);
@@ -1846,10 +2313,8 @@ export function createVeyraWorld(container, opts) {
         const x = p[0] + (ux / ul) * 4.0, z = p[1] + (uz / ul) * 4.0;
         placeProp(props.streetlight(), x, z, Math.atan2(ux, uz));
         circles.push({ x, z, r: 0.4 });
-        // benches facing the water (more frequent now).
-        const bx = p[0] + (ux / ul) * 2.5, bz = p[1] + (uz / ul) * 2.5;
-        placeProp(props.bench(), bx, bz, Math.atan2(ux, uz) + Math.PI / 2);
-        circles.push({ x: bx, z: bz, r: 0.9 });
+        // (Benches moved to the canonical sittable set — see buildSeating — so
+        //  every client agrees on bench positions + seat slots for multiplayer.)
       }
 
       // ── Iconic Hoan Kiem RAILING: posts + a top rail just outside the water rim,
@@ -2459,6 +2924,12 @@ export function createVeyraWorld(container, opts) {
     if (mag > 1) { ix /= mag; iz /= mag; mag = 1; }
 
     const pp = player.group.position;
+    // Seated: any movement input stands the player up; otherwise stay locked to
+    // the seat (skip walking entirely this frame).
+    if (sitting) {
+      if (mag > 0.08) requestStand();
+      else moving = false;
+    }
     // After a ticket is accepted the guard opens the gate and the player walks IN
     // automatically — steer toward a point just inside the gate, overriding input
     // until they're past the fence.
@@ -2557,10 +3028,11 @@ export function createVeyraWorld(container, opts) {
       }
     }
     if (islandInfo) { const di = islandInfo; if (Math.hypot(pp.x - di.x, pp.z - di.z) <= di.r - 0.4) targetY = Math.max(targetY, di.deckY); }
+    if (sitting) targetY = SEAT_Y;   // locked to the bench seat height
     // Jump (space) + gravity. Grounded → smooth-follow terrain (bridge/island);
     // airborne → integrate vertical velocity.
     const baseY = targetY;
-    if (keys[' '] && vy === 0 && pp.y <= baseY + 0.06) vy = 6.4;
+    if (!sitting && keys[' '] && vy === 0 && pp.y <= baseY + 0.06) vy = 6.4;
     if (vy !== 0 || pp.y > baseY + 0.02) {
       vy -= 18 * dt; pp.y += vy * dt;
       if (pp.y <= baseY) { pp.y = baseY; vy = 0; }
@@ -2568,15 +3040,19 @@ export function createVeyraWorld(container, opts) {
       pp.y += (baseY - pp.y) * Math.min(1, dt * 9);
     }
 
-    const sp = moving ? mag : 0;
-    phase += dt * (6 + sp * 4) * (moving ? 1 : 0);
-    const swing = moving ? 0.7 * sp : 0;
-    const ease = (p, v) => p.rotation.x += (v - p.rotation.x) * Math.min(1, dt * 14);
-    ease(parts.legL, Math.sin(phase) * swing);
-    ease(parts.legR, -Math.sin(phase) * swing);
-    ease(parts.armL, -Math.sin(phase) * swing * 0.7);
-    ease(parts.armR, Math.sin(phase) * swing * 0.7);
-    parts.torso.position.y = 1.05 + (moving ? Math.abs(Math.sin(phase)) * 0.04 : 0);
+    if (sitting) {
+      applySitPose(parts, player.group, true);
+    } else {
+      const sp = moving ? mag : 0;
+      phase += dt * (6 + sp * 4) * (moving ? 1 : 0);
+      const swing = moving ? 0.7 * sp : 0;
+      const ease = (p, v) => p.rotation.x += (v - p.rotation.x) * Math.min(1, dt * 14);
+      ease(parts.legL, Math.sin(phase) * swing);
+      ease(parts.legR, -Math.sin(phase) * swing);
+      ease(parts.armL, -Math.sin(phase) * swing * 0.7);
+      ease(parts.armR, Math.sin(phase) * swing * 0.7);
+      parts.torso.position.y = 1.05 + (moving ? Math.abs(Math.sin(phase)) * 0.04 : 0);
+    }
     blob.position.set(pp.x, pp.y + 0.05, pp.z);
 
     // Camera-wall occlusion: keep the third-person camera from passing through
@@ -2717,6 +3193,28 @@ export function createVeyraWorld(container, opts) {
         for (const lf of sd.leaves) lf.grp.rotation.y = lf.openYaw * sd.openT;
       }
     }
+    // Public landmarks open/close with REAL Hanoi time: doors swing, windows glow,
+    // a warm light comes on, and the status sign flips MỞ CỬA / ĐÓNG CỬA.
+    if (landmarks.length) {
+      const hr = hanoiHour();
+      for (const lm of landmarks) {
+        // Post-office clock hands track real time every frame, open or shut.
+        if (lm.clock) {
+          const mins = (hr % 1);                          // fraction of the hour
+          lm.clock.minute.rotation.z = -mins * Math.PI * 2;
+          lm.clock.hour.rotation.z = -(((hr % 12) + mins) / 12) * Math.PI * 2;
+        }
+        const tgt = lm.ranges.some(([a, b]) => hr >= a && hr < b) ? 1 : 0;
+        if (Math.abs(lm.openT - tgt) > 0.001) {
+          lm.openT += (tgt - lm.openT) * Math.min(1, dt * 2);
+          for (const lf of lm.leaves) lf.grp.rotation.y = lf.openYaw * lm.openT;
+          for (const gm of lm.glowMats) gm.emissiveIntensity = lm.openT * gm.userData.baseEmissive;
+          for (const li of lm.lights) li.intensity = lm.openT * li.userData.baseInt;
+          if (lm.signOpen) lm.signOpen.visible = lm.openT > 0.5;
+          if (lm.signClosed) lm.signClosed.visible = lm.openT <= 0.5;
+        }
+      }
+    }
     for (let gi = 0; gi < liveGuards.length; gi++) {
       const gp = liveGuards[gi].g.parts, p2 = liveGuards[gi].ph;
       gp.torso.position.y = 1.05 + Math.abs(Math.sin(t * 1.7 + p2)) * 0.03;
@@ -2812,6 +3310,23 @@ export function createVeyraWorld(container, opts) {
     miniAccum += dt;
     if (miniAccum > 0.12) { drawMinimap(); miniAccum = 0; }
 
+    // ── Multiplayer: interpolate remote avatars + report the local transform ──
+    updateRemotes(dt, t);
+    {
+      const anim = sitting ? 'sit' : (moving ? 'walk' : 'idle');
+      opts.onLocalState && opts.onLocalState({
+        x: pp.x, z: pp.z, rotY: player.group.rotation.y, anim, seatId: localSeatId,
+      });
+      // Sit prompt: offer "stand" while seated, else "sit" when a free seat is in
+      // reach. Only emit on change so WorldScreen isn't spammed.
+      nearestFreeSeatId = sitting ? null : findNearestFreeSeat(pp.x, pp.z);
+      const sig = sitting ? 'seated' : (nearestFreeSeatId ? 'can:' + nearestFreeSeatId : '');
+      if (sig !== lastSitSig) {
+        lastSitSig = sig;
+        opts.onSit && opts.onSit({ seated: sitting, canSit: !!nearestFreeSeatId });
+      }
+    }
+
     // Persist the world position (for everyone — signed-in and guests) so a
     // reload resumes where the player was standing. The `entered` flag rides
     // along so a guest who already cleared a gate stays inside on reload.
@@ -2884,9 +3399,20 @@ export function createVeyraWorld(container, opts) {
 
   // ── API ──────────────────────────────────────────────────
   return {
+    // Multiplayer: WorldScreen forwards realtime events into the engine here.
+    net: {
+      snapshot(states) { applySnapshot(states); },
+      playerLeft(id) { playerLeft(id); },
+      seatGranted(seatId) { seatGranted(seatId); },
+      seatDenied(seatId) { seatDenied(seatId); },
+    },
+    // Sit controls (driven by the sit prompt button in WorldScreen).
+    sit() { requestSit(); },
+    stand() { requestStand(); },
     dispose() {
       disposed = true;
       running = false; cancelAnimationFrame(raf);
+      for (const id of [...remotePlayers.keys()]) disposeRemote(id);
       clearInterval(weatherTimer); clearInterval(timeTimer);
       document.removeEventListener('visibilitychange', onVis);
       window.removeEventListener('keydown', onPerfKey);
