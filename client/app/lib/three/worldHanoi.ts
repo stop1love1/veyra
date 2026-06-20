@@ -1288,7 +1288,7 @@ export function createVeyraWorld(container, opts) {
     // never pokes through a wall (narrow alleys simply get no sidewalk). Each
     // category is merged into ONE mesh → only ~3 extra draw calls for the whole map.
     if (roadList.length) {
-      const ROAD_Y = 0.14, KERB_Y = 0.205, LINE_Y = 0.158;   // asphalt < kerb-top; paint just above asphalt
+      const ROAD_Y = 0.14, KERB_Y = 0.22, LINE_Y = 0.158;   // asphalt < kerb-top; paint just above asphalt
       const SW = 2.2;                                          // sidewalk depth (m)
 
       // Point-in-building test (buildingPolys was filled during the building loop
@@ -1373,14 +1373,23 @@ export function createVeyraWorld(container, opts) {
         return g;
       };
       const addStatic = (mesh) => { mesh.matrixAutoUpdate = false; mesh.updateMatrix(); scene.add(mesh); };
+      // Sidewalk + kerb get DEDICATED materials with a strong negative polygonOffset
+      // so they always win the z-test over the asphalt (offset -2) they border —
+      // killing the dark z-fighting seam that ran along the road/kerb boundary.
       if (sPos.length) {
         const g = mkGeo(sPos, sIdx);
         g.setAttribute('uv', new THREE.Float32BufferAttribute(sUV, 2));
-        const m = new THREE.Mesh(g, mats.paving);
+        const swMat = mats.paving.clone();
+        swMat.polygonOffset = true; swMat.polygonOffsetFactor = -6; swMat.polygonOffsetUnits = -6;
+        localMats.push(swMat);
+        const m = new THREE.Mesh(g, swMat);
         m.receiveShadow = true; addStatic(m);
       }
       if (kPos.length) {
-        const m = new THREE.Mesh(mkGeo(kPos, kIdx), mats.curb);
+        const kerbMat = mats.curb.clone();
+        kerbMat.polygonOffset = true; kerbMat.polygonOffsetFactor = -6; kerbMat.polygonOffsetUnits = -6;
+        localMats.push(kerbMat);
+        const m = new THREE.Mesh(mkGeo(kPos, kIdx), kerbMat);
         m.castShadow = false; m.receiveShadow = true; addStatic(m);
       }
       if (lPos.length) {
