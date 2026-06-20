@@ -659,9 +659,14 @@ export function createVeyraWorld(container, opts) {
     }
     const dirtTex = new THREE.CanvasTexture(dirtCanvas);
     dirtTex.wrapS = dirtTex.wrapT = THREE.RepeatWrapping; dirtTex.colorSpace = THREE.SRGBColorSpace;
-    dirtTex.repeat.set(200, 200); if (q.anisotropy) dirtTex.anisotropy = q.anisotropy;
+    // Modest tiling + full anisotropy so the dirt doesn't shimmer/moiré at distance.
+    dirtTex.repeat.set(70, 70); dirtTex.anisotropy = Math.max(4, q.anisotropy || 4);
     ownedTextures.push(dirtTex);
+    // The dirt is the BASE layer under everything; a positive polygonOffset pushes it
+    // back in the depth buffer so the near-coplanar greens / roads / sidewalks always
+    // win the z-test (no flicker) regardless of the tiny y-gaps between the layers.
     const groundMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1, metalness: 0, map: dirtTex });
+    groundMat.polygonOffset = true; groundMat.polygonOffsetFactor = 2; groundMat.polygonOffsetUnits = 2;
     const groundGeo = new THREE.CircleGeometry(SKYLINE_OUTER + extentR * 0.4, 96);
     ownedGeoms.push(groundGeo);
     const ground = new THREE.Mesh(groundGeo, groundMat);
@@ -1803,27 +1808,44 @@ export function createVeyraWorld(container, opts) {
   // ── Chat bubbles ─────────────────────────────────────────────────────────
   // A speech bubble drawn to a canvas sprite (sprites auto-billboard). Word-wraps
   // to ≤2 lines; overflow truncated with an ellipsis.
-  function makeBubble(text) {
-    const cv = document.createElement('canvas'); cv.width = 340; cv.height = 128;
-    const cx = cv.getContext('2d');
-    const fontPx = 26, maxTextW = 280;
-    cx.font = `600 ${fontPx}px system-ui, sans-serif`; cx.textBaseline = 'middle';
-    // Word-wrap into up to 2 lines that fit ~maxTextW.
-    const words = String(text).split(' ');
+  // Word-wrap to fit `maxW`, breaking over-long unbroken tokens (e.g. a pasted
+  // URL) mid-word so nothing ever spills past the bubble edge.
+  function wrapBubbleLines(cx, text, maxW) {
+    const tokens = String(text).replace(/\s+/g, ' ').trim().split(' ');
     const lines = []; let line = '';
-    for (const w of words) {
-      const test = line ? line + ' ' + w : w;
-      if (cx.measureText(test).width > maxTextW && line) { lines.push(line); line = w; if (lines.length === 2) break; }
+    for (let t of tokens) {
+      while (cx.measureText(t).width > maxW) {           // hard-break a too-long token
+        let fit = 1;
+        while (fit < t.length && cx.measureText(t.slice(0, fit + 1)).width <= maxW) fit++;
+        if (line) { lines.push(line); line = ''; }
+        lines.push(t.slice(0, fit)); t = t.slice(fit);
+      }
+      const test = line ? line + ' ' + t : t;
+      if (cx.measureText(test).width > maxW && line) { lines.push(line); line = t; }
       else line = test;
     }
-    if (lines.length < 2 && line) lines.push(line);
-    if (lines.length === 2 && cx.measureText(lines[1]).width > maxTextW) {
-      while (lines[1].length > 1 && cx.measureText(lines[1] + '…').width > maxTextW) lines[1] = lines[1].slice(0, -1);
-      lines[1] += '…';
+    if (line) lines.push(line);
+    return lines;
+  }
+  function makeBubble(text) {
+    const fontPx = 26, maxTextW = 300, padX = 22, padY = 13, lineH = 32, tailH = 16, tailW = 22, MAX_LINES = 24;
+    const font = `600 ${fontPx}px system-ui, sans-serif`;
+    // Measure + wrap on a throwaway context, THEN size the real canvas to fit.
+    const m = document.createElement('canvas').getContext('2d'); m.font = font;
+    let lines = wrapBubbleLines(m, text, maxTextW);
+    if (lines.length > MAX_LINES) {                       // cap absurdly long messages
+      lines = lines.slice(0, MAX_LINES);
+      let last = lines[MAX_LINES - 1];
+      while (last.length > 1 && m.measureText(last + '…').width > maxTextW) last = last.slice(0, -1);
+      lines[MAX_LINES - 1] = last + '…';
     }
-    const padX = 22, padY = 13, lineH = 32, tailH = 16, tailW = 22;
-    const tw = Math.min(maxTextW, Math.max(...lines.map((l) => cx.measureText(l).width)));
-    const bw = tw + padX * 2, bh = lines.length * lineH + padY * 2;
+    const tw = Math.min(maxTextW, Math.max(1, ...lines.map((l) => m.measureText(l).width)));
+    const bw = Math.ceil(tw) + padX * 2, bh = lines.length * lineH + padY * 2;
+    const cv = document.createElement('canvas');
+    cv.width = bw + 24;                                    // margin for the soft shadow
+    cv.height = bh + tailH + 16;
+    const cx = cv.getContext('2d');
+    cx.font = font; cx.textBaseline = 'middle';
     const bx = (cv.width - bw) / 2, by = cv.height - tailH - bh - 8;
     const tcx = cv.width / 2;
     // Soft drop shadow under the whole bubble (body + tail share it).
@@ -1846,7 +1868,9 @@ export function createVeyraWorld(container, opts) {
     const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false, depthWrite: false });
     localMats.push(mat);
     const spr = new THREE.Sprite(mat);
-    const worldW = 3.4; spr.scale.set(worldW, worldW * cv.height / cv.width, 1);
+    // 1 world unit = 100 canvas px, so glyph size stays constant no matter how
+    // wide/tall the bubble grew (short messages → small, long ones → taller).
+    spr.scale.set(cv.width / 100, cv.height / 100, 1);
     spr.center.set(0.5, 0);    // anchor at the tail tip so it points to the head
     spr.renderOrder = 14;
     return spr;
