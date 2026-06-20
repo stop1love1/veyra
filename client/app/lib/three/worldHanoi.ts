@@ -1186,6 +1186,10 @@ export function createVeyraWorld(container, opts) {
     // floating enter-marker + interactable to each (like world.ts).
     placeShopsNearNorthShore(buildList, lakeCx, lakeNorthZ);
 
+    // Street wayfinding: blue "PHỐ …" name plates, "NGÕ" alley signs, a
+    // directional fingerpost, and a few brand signboards along the lakeside.
+    buildStreetSignage(roadList, lakeCx, lakeCz, lakeNorthZ, lakeR);
+
     // Pulsing additive ground glow ring under each interactable marker.
     for (let i = 0; i < interactables.length; i++) {
       const it = interactables[i];
@@ -1209,8 +1213,9 @@ export function createVeyraWorld(container, opts) {
     dressPromenade(lakePoly, lakeCx, lakeCz);
 
     // Canonical, sittable benches (multiplayer seat slots) — tier-independent so
-    // every client agrees on positions + seat ids.
-    buildSeating(lakeCx, lakeCz, lakeR);
+    // every client agrees on positions + seat ids. Placed along the real lake
+    // shore (lakePoly) so they hug the promenade instead of a naive circle.
+    buildSeating(lakeCx, lakeCz, lakeR, lakePoly);
 
     // ─────────────── Lakeside lantern string (warm emissive at dusk) ──────
     const lanternP = [];
@@ -1575,14 +1580,56 @@ export function createVeyraWorld(container, opts) {
   // ── Seating (local player) ───────────────────────────────────────────────
   // Build the canonical sittable benches from the (shared) lake geometry, render
   // them with collision, and register every seat anchor.
-  function buildSeating(lakeCx, lakeCz, lakeR) {
-    socialBenches = buildSocialBenches(lakeCx, lakeCz, lakeR);
+  function buildSeating(lakeCx, lakeCz, lakeR, poly) {
+    socialBenches = buildSocialBenches(lakeCx, lakeCz, lakeR, poly);
+    // Per-type materials (tracked for disposal). Seat surfaces sit at ~SEAT_Y so
+    // the seated avatar (lifted to SEAT_Y) rests on them. Seat LENGTH runs along
+    // local X (the slot axis benchSlots lays out), the sitter faces local +Z.
+    const matStone = new THREE.MeshStandardMaterial({ color: hsl(210, 0.04, 0.62), roughness: 0.95 });
+    const matWood = new THREE.MeshStandardMaterial({ color: hsl(28, 0.5, 0.42), roughness: 0.8 });
+    const matWoodLeg = new THREE.MeshStandardMaterial({ color: hsl(210, 0.05, 0.26), roughness: 0.5, metalness: 0.55 });
+    const matModern = new THREE.MeshStandardMaterial({ color: hsl(174, 0.4, 0.5), roughness: 0.5, metalness: 0.2 });
+    localMats.push(matStone, matWood, matWoodLeg, matModern);
+
+    function stoneBench(len) {
+      const g = new THREE.Group();
+      const seat = new THREE.Mesh(new THREE.BoxGeometry(len, 0.14, 0.52), matStone);
+      seat.position.y = 0.44; seat.castShadow = true; seat.receiveShadow = true; g.add(seat);
+      [-len / 2 + 0.28, len / 2 - 0.28].forEach((sx) => {
+        const leg = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.44, 0.46), matStone);
+        leg.position.set(sx, 0.22, 0); leg.castShadow = true; g.add(leg);
+      });
+      return g;
+    }
+    function woodBench(len) {
+      const g = new THREE.Group();
+      const seat = new THREE.Mesh(new THREE.BoxGeometry(len, 0.08, 0.46), matWood);
+      seat.position.y = 0.44; seat.castShadow = true; seat.receiveShadow = true; g.add(seat);
+      const back = new THREE.Mesh(new THREE.BoxGeometry(len, 0.42, 0.06), matWood);
+      back.position.set(0, 0.68, -0.2); back.castShadow = true; g.add(back);   // backrest behind sitter
+      [-len / 2 + 0.18, len / 2 - 0.18].forEach((sx) => {
+        const leg = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.44, 0.42), matWoodLeg);
+        leg.position.set(sx, 0.22, 0); g.add(leg);
+      });
+      return g;
+    }
+    function modernBench(len) {
+      const g = new THREE.Group();
+      const seat = new THREE.Mesh(new THREE.BoxGeometry(len, 0.1, 0.6), matModern);
+      seat.position.y = 0.46; seat.castShadow = true; seat.receiveShadow = true; g.add(seat);
+      const base = new THREE.Mesh(new THREE.BoxGeometry(len * 0.7, 0.42, 0.34), matModern);
+      base.position.y = 0.21; g.add(base);
+      return g;
+    }
+    const builders = { stone: stoneBench, wood: woodBench, modern: modernBench };
+
     for (const b of socialBenches) {
-      const g = props.bench();
+      const g = (builders[b.type] || stoneBench)(b.len);
       g.position.set(b.x, 0, b.z); g.rotation.y = b.rotY;
       g.matrixAutoUpdate = false; g.updateMatrix();
       scene.add(g); itemGroups.push(g);
-      circles.push({ x: b.x, z: b.z, r: 1.0 });   // collision so you can't walk through
+      // Collision sized to the bench length so you can't walk through it.
+      circles.push({ x: b.x, z: b.z, r: Math.max(0.9, (b.len / 2) * 0.7) });
       for (const s of benchSlots(b)) seatById.set(s.seatId, { x: s.x, z: s.z, rotY: s.rotY });
     }
   }
@@ -1596,30 +1643,40 @@ export function createVeyraWorld(container, opts) {
     }
     return best;
   }
+  // Sit OPTIMISTICALLY: snap onto the seat immediately (so sitting never waits on
+  // — or breaks because of — a socket round-trip), then ask the server to confirm.
+  // If the server denies it (another player got there first), we stand back up.
+  function sitAt(seatId) {
+    const st = seatById.get(seatId); if (!st || !player) return;
+    localSeatId = seatId; sitting = true;
+    player.group.position.x = st.x; player.group.position.z = st.z;
+    player.group.rotation.y = st.rotY;
+  }
   function requestSit() {
     if (sitting || !player) return;
     const seatId = findNearestFreeSeat(player.group.position.x, player.group.position.z);
     if (!seatId) return;
     pendingSeatId = seatId;
-    if (opts.claimSeat) opts.claimSeat(seatId);
-    else seatGranted(seatId);   // offline / no realtime → grant locally
+    sitAt(seatId);                       // optimistic — sit right now
+    if (opts.claimSeat) opts.claimSeat(seatId);   // server reconciles (may deny)
   }
   function requestStand() {
     if (!sitting) return;
-    sitting = false; localSeatId = null;
+    sitting = false; localSeatId = null; pendingSeatId = null;
     applySitPose(player.parts, player.group, false);
     if (opts.releaseSeat) opts.releaseSeat();
   }
   function seatGranted(seatId) {
-    if (seatId !== pendingSeatId) return;   // only honour the seat we asked for
-    pendingSeatId = null;
-    const st = seatById.get(seatId); if (!st) return;
-    localSeatId = seatId; sitting = true;
-    player.group.position.x = st.x; player.group.position.z = st.z;
-    player.group.rotation.y = st.rotY;
+    // We already sat optimistically; just confirm (snap again in case we drifted).
+    if (seatId === pendingSeatId) { pendingSeatId = null; sitAt(seatId); }
   }
   function seatDenied(seatId) {
     if (seatId === pendingSeatId) pendingSeatId = null;
+    // The seat we optimistically took is actually held by someone else → stand.
+    if (localSeatId === seatId && sitting) {
+      sitting = false; localSeatId = null;
+      applySitPose(player.parts, player.group, false);
+    }
   }
   function buildFenceAndGates() {
     const gated = !opts.authed;               // guests face closed gates until a ticket clears
@@ -2099,6 +2156,130 @@ export function createVeyraWorld(container, opts) {
       bx(g, mats.paving, S.W * 0.5, 0.45, 0.5, 0, 0.28, 1.2); solidBox(g, 0, 1.2, S.W * 0.5, 0.5);
       registerLandmark(handle);
     })();
+  }
+
+  // ── STREET SIGNAGE: blue "PHỐ …" name plates, "NGÕ" alley signs, a
+  //    directional fingerpost to the landmarks, and a few brand signboards. ──
+  function buildStreetSignage(roadList, lakeCx, lakeCz, northZ, lakeR) {
+    if (!roadList || !roadList.length) return;
+    const TIER = q.tier;
+    // Canvas plate texture: white text + border on an enamel ground.
+    function plateTex(main, sub, bg, W, H) {
+      W = W || 560; H = H || 200;
+      const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+      const c = cv.getContext('2d');
+      c.fillStyle = bg || '#0e5bb0'; c.fillRect(0, 0, W, H);
+      c.strokeStyle = '#ffffff'; c.lineWidth = Math.round(H * 0.045); c.strokeRect(c.lineWidth, c.lineWidth, W - c.lineWidth * 2, H - c.lineWidth * 2);
+      c.fillStyle = '#ffffff'; c.textAlign = 'center'; c.textBaseline = 'middle';
+      let fs = Math.round(H * 0.4); c.font = `800 ${fs}px "Be Vietnam Pro", Arial, sans-serif`;
+      while (c.measureText(main).width > W - H * 0.4 && fs > 22) { fs -= 3; c.font = `800 ${fs}px "Be Vietnam Pro", Arial, sans-serif`; }
+      c.fillText(main, W / 2, sub ? H * 0.42 : H / 2);
+      if (sub) { c.font = `600 ${Math.round(H * 0.16)}px "Be Vietnam Pro", Arial, sans-serif`; c.fillText(sub, W / 2, H * 0.76); }
+      const tex = new THREE.CanvasTexture(cv); tex.anisotropy = 4; tex.colorSpace = THREE.SRGBColorSpace;
+      ownedTextures.push(tex); return tex;
+    }
+    function signMat(tex) {
+      const m = new THREE.MeshStandardMaterial({ map: tex, emissive: 0xffffff, emissiveMap: tex, emissiveIntensity: 0.18, roughness: 0.5, metalness: 0.1 });
+      localMats.push(m); return m;
+    }
+    // A two-sided plate on a pole; the group yaw aligns the front (+z) to the reader.
+    function poleSign(x, z, ang, tex, pw, poleH, aspect) {
+      const g = new THREE.Group(); g.position.set(x, 0, z); g.rotation.y = ang; scene.add(g);
+      const ph = pw * (aspect || 200 / 560), y = poleH - ph / 2 - 0.05;
+      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.07, poleH, 8), mats.steelDark);
+      pole.position.y = poleH / 2; pole.castShadow = true; g.add(pole); ownedGeoms.push(pole.geometry);
+      const back = new THREE.Mesh(new THREE.BoxGeometry(pw + 0.06, ph + 0.06, 0.05), mats.steelDark);
+      back.position.set(0, y, 0); g.add(back); ownedGeoms.push(back.geometry);
+      const mat = signMat(tex);
+      const f1 = new THREE.Mesh(new THREE.PlaneGeometry(pw, ph), mat); f1.position.set(0, y, 0.031); g.add(f1); ownedGeoms.push(f1.geometry);
+      const f2 = new THREE.Mesh(new THREE.PlaneGeometry(pw, ph), mat); f2.position.set(0, y, -0.031); f2.rotation.y = Math.PI; g.add(f2); ownedGeoms.push(f2.geometry);
+      circles.push({ x, z, r: 0.25 });
+      return g;
+    }
+    const within = (x, z) => landmarkSites.some((s) => Math.hypot(x - s.cx, z - s.cz) < s.clearR + 2);
+    const placed = [];
+    const farEnough = (x, z, d) => !placed.some((p) => Math.hypot(p[0] - x, p[1] - z) < d);
+    const lakeEnd = (a, b) => (Math.hypot(a[0] - lakeCx, a[1] - lakeCz) <= Math.hypot(b[0] - lakeCx, b[1] - lakeCz) ? a : b);
+
+    // 1) Street-name plates on the main roads nearest the lake.
+    const NAMES = ['Hàng Đào', 'Hàng Ngang', 'Hàng Đường', 'Hàng Gai', 'Hàng Bạc', 'Hàng Bồ', 'Hàng Bông', 'Hàng Mã', 'Hàng Thiếc', 'Hàng Quạt', 'Hàng Buồm', 'Lương Văn Can', 'Lý Quốc Sư', 'Cầu Gỗ', 'Đinh Liệt', 'Tạ Hiện', 'Mã Mây', 'Lò Sũ', 'Đinh Tiên Hoàng', 'Lê Thái Tổ'];
+    const capPho = TIER === 'low' ? 6 : TIER === 'mid' ? 12 : 20;
+    const cand = roadList
+      .filter((r) => r.w >= 3 && r.pts && r.pts.length >= 2)
+      .map((r) => { const a = r.pts[0], b = r.pts[r.pts.length - 1]; return { r, a, b, d: Math.hypot((a[0] + b[0]) / 2 - lakeCx, (a[1] + b[1]) / 2 - lakeCz) }; })
+      .sort((p, q2) => p.d - q2.d);
+    let ni = 0;
+    for (const cnd of cand) {
+      if (ni >= capPho) break;
+      const near = lakeEnd(cnd.a, cnd.b), far = near === cnd.a ? cnd.b : cnd.a;
+      const dl = Math.hypot(near[0] - lakeCx, near[1] - lakeCz);
+      if (dl < lakeR + 3 || dl > lakeR + 240 || !farEnough(near[0], near[1], 16) || within(near[0], near[1])) continue;
+      let dx = far[0] - near[0], dz = far[1] - near[1]; const dn = Math.hypot(dx, dz) || 1; dx /= dn; dz /= dn;
+      const off = cnd.r.w / 2 + 0.7;
+      poleSign(near[0] - dz * off, near[1] + dx * off, Math.atan2(dx, dz), plateTex('PHỐ ' + NAMES[ni % NAMES.length].toUpperCase(), 'QUẬN HOÀN KIẾM'), 2.2, 2.9);
+      placed.push(near); ni++;
+    }
+
+    // 2) "NGÕ" alley plates on the narrow roads nearest the lake.
+    const capNgo = TIER === 'low' ? 3 : 6;
+    const narrow = roadList
+      .filter((r) => r.w > 0 && r.w < 2.3 && r.pts && r.pts.length >= 2)
+      .map((r) => ({ r, a: r.pts[0], d: Math.hypot(r.pts[0][0] - lakeCx, r.pts[0][1] - lakeCz) }))
+      .sort((p, q2) => p.d - q2.d);
+    let ng = 0;
+    for (const cnd of narrow) {
+      if (ng >= capNgo) break;
+      const a = cnd.a, b = cnd.r.pts[1];
+      const dl = Math.hypot(a[0] - lakeCx, a[1] - lakeCz);
+      if (dl < lakeR + 3 || dl > lakeR + 160 || !farEnough(a[0], a[1], 14) || within(a[0], a[1])) continue;
+      let dx = b[0] - a[0], dz = b[1] - a[1]; const dn = Math.hypot(dx, dz) || 1; dx /= dn; dz /= dn;
+      poleSign(a[0] - dz * 0.8, a[1] + dx * 0.8, Math.atan2(dx, dz), plateTex('NGÕ ' + (5 + ng * 4), null), 1.1, 2.4);
+      placed.push(a); ng++;
+    }
+
+    // 3) Directional fingerpost near the north shore → the landmarks.
+    (function fingerpost() {
+      const px = lakeCx - 7, pz = northZ - 3;
+      const g = new THREE.Group(); g.position.set(px, 0, pz); scene.add(g);
+      const poleH = 3.4;
+      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.1, poleH, 10), mats.steelDark);
+      pole.position.y = poleH / 2; pole.castShadow = true; g.add(pole); ownedGeoms.push(pole.geometry);
+      const byKey = {}; for (const s of landmarkSites) byKey[s.key] = s;
+      const targets = [['ĐỀN NGỌC SƠN', lakeCx, northZ + 16], ['HỒ HOÀN KIẾM', lakeCx, lakeCz]];
+      if (byKey.cathedral) targets.push(['NHÀ THỜ LỚN', byKey.cathedral.cx, byKey.cathedral.cz]);
+      if (byKey.opera) targets.push(['NHÀ HÁT LỚN', byKey.opera.cx, byKey.opera.cz]);
+      if (byKey.post) targets.push(['BƯU ĐIỆN', byKey.post.cx, byKey.post.cz]);
+      let by = poleH - 0.45;
+      for (const [label, tx, tz] of targets) {
+        const ang = Math.atan2(-(tz - pz), tx - px);                 // local +x → target
+        const blade = new THREE.Group(); blade.position.set(0, by, 0); blade.rotation.y = ang; g.add(blade);
+        const L = 2.6, h = 0.52, tex = plateTex(label, null, '#1c6b3a', 700, 150);
+        const mat = signMat(tex);
+        for (const sgn of [1, -1]) {
+          const pl = new THREE.Mesh(new THREE.PlaneGeometry(L, h), mat);
+          pl.position.set(L / 2, 0, sgn * 0.03); if (sgn < 0) pl.rotation.y = Math.PI; blade.add(pl); ownedGeoms.push(pl.geometry);
+        }
+        const tip = new THREE.Mesh(new THREE.ConeGeometry(h * 0.62, 0.5, 3), mat);
+        tip.rotation.z = -Math.PI / 2; tip.position.set(L + 0.2, 0, 0); blade.add(tip); ownedGeoms.push(tip.geometry);
+        by -= 0.6;
+      }
+      circles.push({ x: px, z: pz, r: 0.35 });
+    })();
+
+    // 4) Brand signboards (colored fascia) on further main-road frontages.
+    const BRANDS = [['PHỞ THÌN', '#a01620'], ['CỘNG CÀ PHÊ', '#2f5d3a'], ['HIGHLANDS COFFEE', '#7a1620'], ['BÁNH MÌ 25', '#b8860b'], ['VÀNG BẠC BẢO TÍN', '#9c7212'], ['LỤA HÀ ĐÔNG', '#7d2b6b'], ['KEM TRÀNG TIỀN', '#1f6f8b'], ['BIA HƠI HÀ NỘI', '#b5402a']];
+    const capBrand = TIER === 'low' ? 0 : TIER === 'mid' ? 5 : 8;
+    let bi = 0;
+    for (const cnd of cand) {
+      if (bi >= capBrand) break;
+      const near = lakeEnd(cnd.a, cnd.b), far = near === cnd.a ? cnd.b : cnd.a;
+      const dl = Math.hypot(far[0] - lakeCx, far[1] - lakeCz);
+      if (dl < lakeR + 6 || dl > lakeR + 200 || !farEnough(far[0], far[1], 18) || within(far[0], far[1])) continue;
+      let dx = near[0] - far[0], dz = near[1] - far[1]; const dn = Math.hypot(dx, dz) || 1; dx /= dn; dz /= dn;
+      const off = cnd.r.w / 2 + 0.7;
+      poleSign(far[0] - dz * off, far[1] + dx * off, Math.atan2(dx, dz), plateTex(BRANDS[bi][0], null, BRANDS[bi][1], 640, 150), 2.6, 3.1, 150 / 640);
+      placed.push(far); bi++;
+    }
   }
 
   // THÁP RÙA — Turtle Tower on a small island at the lake centre.
