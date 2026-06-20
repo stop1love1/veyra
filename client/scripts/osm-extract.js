@@ -143,7 +143,7 @@ function transform(elements, opts) {
 
   // Lake = largest near-origin water polygon; force it to water[0] (see gen-hanoi notes).
   const R = Math.max(tagR, 700);
-  const inDisc = (poly) => poly.every((p) => Math.hypot(p[0], p[1]) <= R * 1.6);
+  const inDisc = (poly) => { const [cx, cz] = centroid(poly); return Math.hypot(cx, cz) <= R * 1.6; };
   const nearOrigin = (poly) => { const [cx, cz] = centroid(poly); return Math.hypot(cx, cz) < 600; };
   const clean = waters.filter(inDisc).sort((a, b) => area2(b) - area2(a));
   const lakeIdx = clean.findIndex((p) => nearOrigin(p) && area2(p) > 40000);

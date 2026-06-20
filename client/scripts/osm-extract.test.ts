@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  projector, buildingTags, roadName, roadClass, poiKind, greenKind, transform,
+  projector, buildingTags, roadName, roadClass, poiKind, greenKind, transform, centroid,
 } from './osm-extract.js';
 
 describe('osm-extract helpers', () => {
@@ -76,9 +76,14 @@ describe('transform(elements)', () => {
     expect(out.trees).toHaveLength(1);
   });
 
-  it('puts the near-origin lake first in water[]', () => {
-    const lake = { type: 'way', tags: { natural: 'water' }, geometry: ring(21.0287, 105.8524, 0.0020) }; // big, near origin
-    const out = transform([lake], opts);
-    expect(out.water.length).toBeGreaterThanOrEqual(1);
+  it('promotes the near-origin lake to water[0] even when a larger far lake exists', () => {
+    const farBig = { type: 'way', tags: { natural: 'water' }, geometry: ring(21.0317, 105.8554, 0.0040) };
+    const nearLake = { type: 'way', tags: { natural: 'water' }, geometry: ring(21.0287, 105.8524, 0.0020) };
+    const out = transform([farBig, nearLake], opts);
+    expect(out.water.length).toBeGreaterThanOrEqual(2);
+    const [cx0, cz0] = centroid(out.water[0]);
+    expect(Math.hypot(cx0, cz0)).toBeLessThan(300);          // the near-origin lake is first
+    const area2 = (p: number[][]) => { let a = 0; for (let i = 0; i < p.length; i++) { const n = p[(i + 1) % p.length]; a += p[i][0] * n[1] - n[0] * p[i][1]; } return Math.abs(a / 2); };
+    expect(area2(out.water[0])).toBeLessThan(area2(out.water[1]));  // promotion happened: water[0] is the smaller, near one
   });
 });
