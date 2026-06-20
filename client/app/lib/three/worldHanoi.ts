@@ -378,15 +378,18 @@ export function createVeyraWorld(container, opts) {
   }
 
   // Build the alpha-leaf-card material for a species (shared sway shader + alphaTest).
-  // FULLY MATTE: roughness 1 + envMapIntensity 0 so the flat cards don't mirror the
-  // sky IBL — that sheen is what read as a glassy / glass-pane look on the foliage.
+  // MATTE foliage (roughness 1 so the flat cards never mirror the sky into a glassy
+  // pane), but with a self-lit GREEN floor (emissiveMap = the leaf texture) + a touch
+  // of sky ambient so the leaves always read as living green — never the pure-black
+  // silhouettes they collapsed to at dawn/dusk/night when direct sun is ~0.
   function makeLeafMaterial(tex) {
     const mat = new THREE.MeshStandardMaterial({
       map: tex, color: 0xffffff, roughness: 1.0, metalness: 0,
       alphaTest: 0.5, side: THREE.DoubleSide,    // alphaTest (not transparent) → no sort issues
       transparent: false, depthWrite: true,
+      emissiveMap: tex, emissive: new THREE.Color(0xffffff), emissiveIntensity: 0.4,
     });
-    mat.envMapIntensity = 0;                      // kill the sky reflection (no glass sheen)
+    mat.envMapIntensity = 0.35;                   // gentle diffuse sky ambient (matte → no sheen)
     localMats.push(mat);
     mat.onBeforeCompile = (shader) => {
       shader.uniforms.uTime = swayUniforms.uTime;
