@@ -1,10 +1,12 @@
 // Game state contract shared by every screen.
 import type { Lang } from '../../data/types';
 import type { PublicUser } from '../api/client';
+import type { RankInfo, RenownSource } from './renown';
+import type { ApiQuestEntry, ApiVoucher, ApiCheckinResult, ApiLeaderboard } from '../api/client';
 
 export type ScreenName =
   | 'gate' | 'splash' | 'create' | 'world'
-  | 'store' | 'cart' | 'checkout' | 'success' | 'quests' | 'seller'
+  | 'store' | 'cart' | 'checkout' | 'success' | 'quests' | 'passport' | 'seller'
   | 'admin-map';
 
 /** Authenticated seller state. Offline-safe: derives from cached veyra_user. */
@@ -85,14 +87,50 @@ export interface Game {
   /** Progress (0..1) toward the next level. */
   levelProgress: number;
 
+  /** Permanent reputation (never spent). Drives Rank — see lib/game/renown. */
+  renown: number;
+  /** Derived rank ladder position (1..5) + progress toward next rank. */
+  rank: RankInfo;
+  /** Single funnel for all Renown gains — posts a server progress event
+   *  (the server owns daily caps + quest advancement). No-op for guests. */
+  recordRenown: (source: RenownSource) => void;
+  /** Rank index just reached (1..5), shown as a celebration; null when none. */
+  rankUp: number | null;
+  dismissRankUp: () => void;
+
+  /** Current daily-streak length + best ever (server-owned). */
+  streak: number;
+  streakBest: number;
+  /** Daily check-in — advances the streak + grants the reward (no-op guest). */
+  checkin: () => void;
+  /** Last check-in reward to celebrate; null when none/dismissed. */
+  streakReward: ApiCheckinResult | null;
+  dismissStreakReward: () => void;
+
+  /** Cached Tastemaker leaderboard (top + the caller's position). */
+  leaderboard: ApiLeaderboard | null;
+  refreshLeaderboard: () => void;
+
+  /** The caller's quests joined with their progress (from GET /me/quests). */
+  quests: ApiQuestEntry[];
+  /** Re-fetch quests + earned vouchers from the API. */
+  refreshProgress: () => void;
+
+  /** Voucher CODES the user owns (earned via milestones), from the API. */
+  earnedRewards: string[];
+  /** Full earned voucher docs (code/type/value) for display + discounts. */
+  earnedVouchers: ApiVoucher[];
+  hasReward: (code: string) => boolean;
+
   /** Favorited product ids (persisted). */
   favorites: string[];
   isFavorite: (id: string) => boolean;
   toggleFavorite: (id: string) => void;
 
-  /** Quest ids already claimed (persisted). */
+  /** Quest ids already claimed (legacy local mirror; kept for compatibility). */
   claimedQuests: string[];
-  claimQuest: (id: string, reward: number) => void;
+  /** Claim a completed quest by its id — the server grants all rewards. */
+  claimQuest: (questId: string) => void;
 
   /** Voucher id currently applied/flagged (persisted). */
   usedVoucher: string | null;

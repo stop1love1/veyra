@@ -1,6 +1,7 @@
 import React from 'react';
 import { VEYRA } from '../../data';
 import { Ic, Btn } from '../../components/ui';
+import { voucherLabel, voucherDiscount } from '../../lib/voucher';
 import type { Game } from '../../lib/game/types';
 
 function PayRow({ label, sub, on }: { label: string; sub?: string; on?: boolean }) {
@@ -14,13 +15,13 @@ function PayRow({ label, sub, on }: { label: string; sub?: string; on?: boolean 
 }
 
 export function CheckoutScreen({ g }: { g: Game }) {
-  // Voucher selection is global so it persists and stays in sync with the
-  // quests/rewards screen — tapping a chip applies/flags it via g.useVoucher.
+  // Only vouchers the account actually OWNS (from the API) are selectable.
+  React.useEffect(() => { g.refreshProgress(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const voucher = g.usedVoucher;
   const sub = g.cartTotal;
-  const v = voucher ? VEYRA.VOUCHERS.find((x) => x.id === voucher) : null;
-  let disc = 0;
-  if (v) disc = v.off <= 1 ? Math.min(50000, sub * v.off) : (sub >= 500000 ? v.off : 0);
+  // The applied voucher only counts if it's one the user owns.
+  const v = g.earnedVouchers.find((x) => x.code === voucher) ?? null;
+  const disc = v ? voucherDiscount(v, sub) : 0;
   const total = Math.max(0, sub - disc);
 
   return (
@@ -41,11 +42,15 @@ export function CheckoutScreen({ g }: { g: Game }) {
         <div className="v-co-card">
           <div className="v-co-head"><Ic name="ticket" size={18} /><span>{g.t('vouchers')}</span></div>
           <div className="v-vouch-row">
-            {VEYRA.VOUCHERS.map((vc) => (
-              <button key={vc.id} className={'v-vouch' + (voucher === vc.id ? ' is-on' : '')}
-                      onClick={() => g.useVoucher(vc.id)}>
-                <div className="v-vouch-off">{VEYRA.tx(vc.label, g.lang)}</div>
-                <div className="v-mono v-vouch-note">{VEYRA.tx(vc.note, g.lang)}</div>
+            {g.earnedVouchers.length === 0 && (
+              <div className="v-mono v-vouch-note">{g.t('noRewards')}</div>
+            )}
+            {g.earnedVouchers.map((vc) => (
+              <button key={vc.code}
+                      className={'v-vouch' + (voucher === vc.code ? ' is-on' : '')}
+                      onClick={() => g.useVoucher(vc.code)}>
+                <div className="v-vouch-off">{voucherLabel(vc, g.lang)}</div>
+                <div className="v-mono v-vouch-note">{vc.code}</div>
               </button>
             ))}
           </div>

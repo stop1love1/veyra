@@ -1,8 +1,6 @@
-// Quests and vouchers.
+// Voucher display catalogue. (The Renown quest ladder is now server-owned and
+// fetched via the API — there is no hardcoded FE quest list anymore.)
 import type { Voucher } from './types';
-
-// Quest ladder now lives in quests.ts (story-aware: source/renown/chapter).
-export { QUESTS } from './quests';
 
 export const VOUCHERS: Voucher[] = [
   { id: 'WELCOME10', off: 0.1,    label: { vi: 'Giảm 10%', en: '10% off' },  note: { vi: 'Tối đa 50k', en: 'Up to 50k' } },

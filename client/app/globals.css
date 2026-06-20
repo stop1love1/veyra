@@ -479,6 +479,8 @@ button:focus-visible,a:focus-visible,input:focus-visible,
 .v-vouch-row::-webkit-scrollbar{display:none;}
 .v-vouch{flex:0 0 auto;border:1.5px dashed var(--line);border-radius:14px;padding:10px 13px;cursor:pointer;text-align:left;background:var(--paper);transition:.15s;}
 .v-vouch.is-on{border-style:solid;border-color:var(--brand);background:var(--brand-soft);}
+.v-vouch.is-locked{position:relative;opacity:.55;cursor:default;}
+.v-vouch-lock{position:absolute;top:8px;right:8px;color:var(--muted);}
 .v-vouch-off{font-weight:700;font-size:13px;color:var(--brand-ink);}
 .v-vouch-note{color:var(--muted);font-size:9px;margin-top:3px;}
 .v-pay{display:flex;align-items:center;gap:11px;padding:5px 0;}
@@ -525,6 +527,61 @@ button:focus-visible,a:focus-visible,input:focus-visible,
 .v-vcard-off{font-weight:700;font-size:15px;color:var(--brand-ink);}
 .v-vcard-note{color:var(--muted);font-size:9px;margin-top:3px;}
 .v-vcard-use{flex:none;border:none;background:var(--text);color:var(--paper);border-radius:999px;padding:9px 17px;font-size:13px;font-weight:700;cursor:pointer;}
+
+/* ─── Renown / Rank: locked quest, HUD chip, Passport ───── */
+.v-quest.is-locked{opacity:.62;}
+.v-quest.is-locked .v-quest-ic{background:var(--paper-3);color:var(--muted);}
+
+/* HUD rank chip (top-right, opens the passport) */
+.v-rankchip{display:inline-flex;align-items:center;gap:5px;border:1px solid rgba(255,255,255,.16);
+  background:rgba(16,38,40,.5);color:#eafcf8;border-radius:999px;padding:5px 11px;font-size:12px;font-weight:700;
+  cursor:pointer;backdrop-filter:blur(10px);white-space:nowrap;}
+.v-rankchip svg{color:var(--brand);}
+
+/* Passport screen */
+.v-passport{flex:1;overflow-y:auto;padding:16px 16px 96px;display:flex;flex-direction:column;gap:14px;}
+.v-pp-card{background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:18px;display:flex;flex-direction:column;gap:9px;}
+.v-pp-rank{font-size:22px;font-weight:800;color:var(--brand-ink);}
+.v-pp-sub{color:var(--muted);font-size:11px;}
+.v-pp-section{font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-top:4px;}
+.v-pp-pillars{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+.v-pp-pillar{display:flex;align-items:center;gap:9px;background:#fff;border:1px solid var(--line);border-radius:var(--radius-sm);padding:13px;color:var(--muted);}
+.v-pp-pillar.is-on{color:var(--brand-ink);border-color:var(--brand);background:var(--brand-soft);}
+.v-pp-pname{flex:1;font-size:13px;font-weight:600;}
+.v-pp-need{font-size:10px;}
+.v-pp-rewards{display:flex;flex-direction:column;gap:11px;}
+.v-pp-empty{color:var(--muted);font-size:13px;padding:10px 2px;}
+
+/* Rank-up celebration overlay */
+.v-rankup{position:fixed;inset:0;z-index:90;display:grid;place-items:center;background:rgba(8,20,22,.6);backdrop-filter:blur(6px);
+  animation:flashin .2s ease;}
+.v-rankup-card{background:#fff;border-radius:var(--radius);padding:26px 28px;max-width:300px;text-align:center;
+  display:flex;flex-direction:column;align-items:center;gap:12px;box-shadow:0 24px 60px rgba(0,0,0,.4);}
+.v-rankup-card svg{color:var(--brand);}
+.v-rankup-rank{font-size:21px;font-weight:800;color:var(--brand-ink);}
+.v-rankup-beat{font-size:14px;color:var(--text);line-height:1.5;}
+
+/* Gatekeeper prologue hook line (under the guard's opening prompt) */
+.v-guard-prologue{margin-top:8px;font-size:12.5px;font-style:italic;color:var(--muted);line-height:1.5;
+  border-left:2px solid var(--brand);padding-left:10px;}
+
+/* ─── Streak + Leaderboard ───────────────────────────────── */
+.v-pp-rank-row{display:flex;align-items:center;justify-content:space-between;gap:10px;}
+.v-streakchip{display:inline-flex;align-items:center;gap:4px;border-radius:999px;padding:4px 10px;
+  font-size:13px;font-weight:800;background:var(--paper-3);color:var(--muted);}
+.v-streakchip.is-on{background:#fff1e0;color:#c2410c;}
+.v-streak-flame{font-size:34px;line-height:1;}
+.v-streak-rewards{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;color:var(--brand-ink);font-weight:700;font-size:13px;}
+.v-streak-rewards span{display:inline-flex;align-items:center;gap:4px;}
+
+.v-lb{display:flex;flex-direction:column;gap:7px;padding-bottom:4px;}
+.v-lb-row{display:flex;align-items:center;gap:11px;background:#fff;border:1px solid var(--line);border-radius:var(--radius-sm);padding:11px 13px;}
+.v-lb-row.is-me{border-color:var(--brand);background:var(--brand-soft);}
+.v-lb-pinned{position:sticky;bottom:0;margin-top:4px;box-shadow:0 -6px 16px rgba(0,0,0,.06);}
+.v-lb-pos{min-width:26px;text-align:center;font-weight:800;font-size:15px;color:var(--brand-ink);}
+.v-lb-dot{width:24px;height:24px;flex:none;border-radius:50%;}
+.v-lb-name{flex:1;min-width:0;font-weight:600;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.v-lb-renown{color:var(--muted);font-size:11px;}
 
 /* ─── Flash toast ────────────────────────────────────────── */
 .v-flash{position:absolute;bottom:120px;left:50%;transform:translateX(-50%);z-index:80;display:flex;align-items:center;gap:7px;

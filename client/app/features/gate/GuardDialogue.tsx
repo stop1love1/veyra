@@ -1,4 +1,6 @@
 import { Btn, Avatar } from '../../components/ui';
+import { VEYRA } from '../../data';
+import { PROLOGUE } from '../../data/story';
 import type { Game } from '../../lib/game/types';
 import type { CSSVars } from '../../lib/css';
 
@@ -46,6 +48,9 @@ export function GuardDialogue(p: GuardDialogueProps) {
       </div>
 
       <div className="v-guard-say">{say}</div>
+      {p.step === 'name' && (
+        <div className="v-guard-prologue">{VEYRA.tx(PROLOGUE, p.g.lang)}</div>
+      )}
 
       {p.step === 'name' ? (
         <>

@@ -21,6 +21,10 @@ export function NpcDialogue({ g }: { g: Game }) {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [msgs]);
 
+  // Talking to a stylist advisor builds taste — post a stylist event; the
+  // server advances the stylist quests. Fires once per opened conversation.
+  React.useEffect(() => { g.recordRenown('stylist'); }, [g.npcOpen]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const pick = (chip: NpcChip) => {
     setMsgs((m) => [...m, { from: 'me', text: VEYRA.tx(chip, g.lang) }]);
     setTimeout(() => {

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { VEYRA } from '../../data';
 import { Avatar, Coin, Ic } from '../ui';
 import { LangChip } from './LangChip';
 import { AccountModal } from '../auth/AccountModal';
@@ -58,6 +59,10 @@ export function HudTop({ g, onMap, onUseLocation }: { g: Game; onMap?: () => voi
         {onMap && <MapBtn onMap={onMap} label={mapLabel} />}
       </div>
       <div className="v-hudtop-right">
+        <button className="v-rankchip" onClick={() => g.go('passport')} title={g.t('passport')}>
+          <Ic name="spark" size={13} />
+          <span>{VEYRA.tx(g.rank.name, g.lang)}</span>
+        </button>
         <Coin value={g.coins} />
         <LangChip g={g} dark inline />
       </div>

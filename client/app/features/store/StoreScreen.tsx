@@ -85,6 +85,10 @@ function useShopManage(g: Game, shopId: string, seed: Product[]) {
 }
 
 export function StoreScreen({ g }: { g: Game }) {
+  // Visiting a district posts an explore event; the server advances every
+  // explore-driven quest. Keyed on the shop id so each visit counts once.
+  const shopId = g.params.shop || 'aria';
+  React.useEffect(() => { g.recordRenown('explore'); }, [shopId]); // eslint-disable-line react-hooks/exhaustive-deps
   return g.lite ? <StoreLite g={g} /> : <Store3D g={g} />;
 }
 

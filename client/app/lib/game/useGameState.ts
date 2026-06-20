@@ -4,14 +4,15 @@ import { VEYRA } from '../../data';
 import { detectLite } from '../theme/detect';
 import i18n from '../i18n';
 import { api, setToken } from '../api/client';
-import type { PublicUser } from '../api/client';
+import type { PublicUser, ApiQuestEntry, ApiVoucher, ApiCheckinResult, ApiLeaderboard } from '../api/client';
 import type {
   Game, Player, CartLine, ScreenName, ScreenParams, WorldPanel, NavSignal, NavDir, AuthState,
 } from './types';
 import type { Lang } from '../../data/types';
+import { deriveRank, type RenownSource } from './renown';
 
 const STORAGE_KEY = 'veyra_state';
-const STATE_VERSION = 1;
+const STATE_VERSION = 2;
 const PERSIST_DEBOUNCE_MS = 500;
 const COIN_BATCH_MS = 350;
 
@@ -119,6 +120,18 @@ export function useGameState(): GameState {
   const [favorites, setFavorites] = React.useState<string[]>(saved.favorites || []);
   const [claimedQuests, setClaimedQuests] = React.useState<string[]>(saved.claimedQuests || []);
   const [usedVoucher, setUsedVoucher] = React.useState<string | null>(saved.usedVoucher ?? null);
+  // Progression is SERVER-OWNED. Renown is seeded from the cached account and
+  // refreshed from the API; quests + earned vouchers are fetched per session.
+  const [renown, setRenown] = React.useState<number>(() => {
+    const cached = readUser();
+    return cached && typeof cached.renown === 'number' ? cached.renown : 0;
+  });
+  const [streak, setStreak] = React.useState<number>(() => readUser()?.streakCount ?? 0);
+  const [streakBest, setStreakBest] = React.useState<number>(() => readUser()?.streakBest ?? 0);
+  const [quests, setQuests] = React.useState<ApiQuestEntry[]>([]);
+  const [earnedVouchers, setEarnedVouchers] = React.useState<ApiVoucher[]>([]);
+  const [streakReward, setStreakReward] = React.useState<ApiCheckinResult | null>(null);
+  const [leaderboard, setLeaderboard] = React.useState<ApiLeaderboard | null>(null);
   const [npcOpen, setNpc] = React.useState<string | null>(null);
   const [prodOpen, setProd] = React.useState<string | null>(null);
   const [worldPanel, setWorldPanel] = React.useState<WorldPanel | null>(null);
@@ -141,6 +154,10 @@ export function useGameState(): GameState {
   const paramsRef = React.useRef(params); paramsRef.current = params;
   const favRef = React.useRef(favorites); favRef.current = favorites;
   const claimedRef = React.useRef(claimedQuests); claimedRef.current = claimedQuests;
+  const earnedRef = React.useRef(earnedVouchers); earnedRef.current = earnedVouchers;
+  // Seeded from the token so child-screen effects on the very first mount see
+  // the correct auth state (parent effects run after child effects in React).
+  const authedRef = React.useRef(!!readToken());
 
   const flashTimer = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const coinTimer = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -242,24 +259,82 @@ export function useGameState(): GameState {
     }, COIN_BATCH_MS);
   }, [flashMsg, t]);
 
+  // ── Progression (server-owned: renown / quests / earned vouchers) ────────
+  // Pull the caller's renown, quests and vouchers from the API. Wrapped so an
+  // offline / guest state simply leaves the bundled defaults in place.
+  const refreshProgress = React.useCallback(async () => {
+    if (!readToken()) return;            // guests have no server progression
+    try {
+      const [qs, vs] = await Promise.all([api.getMyQuests(), api.getMyVouchers()]);
+      setQuests(qs);
+      setEarnedVouchers(vs);
+    } catch { /* offline — keep whatever we have */ }
+  }, []);
+
+  // Daily check-in: advances the server-side streak + grants the escalating
+  // reward. Idempotent within a day (server returns alreadyToday). No-op guest.
+  const checkin = React.useCallback(() => {
+    if (!authedRef.current) return;
+    api.checkin()
+      .then((r) => {
+        setStreak(r.streak);
+        setStreakBest(r.best);
+        setRenown(r.renown);
+        if (!r.alreadyToday && (r.reward.coins > 0 || r.reward.renown > 0)) {
+          if (r.reward.coins > 0) setCoins((c) => c + r.reward.coins);
+          setStreakReward(r);
+          void refreshProgress();   // pick up the milestone voucher / quest bump
+        }
+      })
+      .catch(() => {});
+  }, [refreshProgress]);
+  const dismissStreakReward = React.useCallback(() => setStreakReward(null), []);
+
+  const refreshLeaderboard = React.useCallback(() => {
+    if (!readToken()) return;
+    api.getLeaderboard(20).then(setLeaderboard).catch(() => {});
+  }, []);
+
   const toggleFavorite = React.useCallback((id: string) => {
-    setFavorites((f) => (f.includes(id) ? f.filter((x) => x !== id) : [...f, id]));
+    const adding = !favRef.current.includes(id);
+    setFavorites((f) => (adding ? [...f, id] : f.filter((x) => x !== id)));
+    // Curating taste is a progress event — the server applies the daily cap and
+    // advances the matching quests; we adopt the returned renown.
+    if (adding && authedRef.current) {
+      api.recordProgress('curate').then((r) => setRenown(r.renown)).catch(() => {});
+    }
   }, []);
   const isFavorite = React.useCallback((id: string) => favRef.current.includes(id), []);
 
-  // Claim a quest once: award its coin reward (if any) and mark it claimed.
-  // Guarded via a ref so side effects fire exactly once (StrictMode-safe).
-  const claimQuest = React.useCallback((id: string, reward: number) => {
-    if (claimedRef.current.includes(id)) return;
-    claimedRef.current = [...claimedRef.current, id];
-    setClaimedQuests(claimedRef.current);
-    if (reward > 0) {
-      setCoins((v) => v + reward);
-      flashMsg('+' + reward + ' ' + t('coinUnit'));
-    } else {
-      flashMsg(t('flashRewardGot'));
-    }
-  }, [flashMsg, t]);
+  // The single funnel for all Renown gains. The SERVER owns caps + quest
+  // advancement; future O2O sources (qr-scan, checkin, event) call the same
+  // endpoint after verification — no client change needed. No-op for guests.
+  const recordRenown = React.useCallback((source: RenownSource) => {
+    if (!authedRef.current) return;
+    api.recordProgress(source)
+      .then((r) => { setRenown(r.renown); if (r.gained > 0) void refreshProgress(); })
+      .catch(() => {});
+  }, [refreshProgress]);
+
+  const hasReward = React.useCallback(
+    (code: string) => earnedRef.current.some((v) => v.code === code), []);
+
+  // Claim a completed quest by its id. The server grants coins + renown +
+  // voucher atomically; we then re-sync account + progression from the API.
+  const claimQuest = React.useCallback((questId: string) => {
+    if (!authedRef.current) return;
+    api.claimMyQuest(questId)
+      .then(async () => {
+        flashMsg(t('flashRewardGot'));
+        try {
+          const u = await api.me();
+          if (typeof u.coins === 'number') setCoins(u.coins);
+          if (typeof u.renown === 'number') setRenown(u.renown);
+        } catch { /* offline */ }
+        void refreshProgress();
+      })
+      .catch(() => flashMsg(t('saveFailed')));
+  }, [flashMsg, t, refreshProgress]);
 
   const voucherRef = React.useRef(usedVoucher); voucherRef.current = usedVoucher;
   const useVoucher = React.useCallback((id: string) => {
@@ -288,13 +363,18 @@ export function useGameState(): GameState {
       setAuthToken(readToken());
       persistUser(u);
       if (u && typeof u.coins === 'number') setCoins(u.coins);  // adopt account balance
+      if (u && typeof u.renown === 'number') setRenown(u.renown);
+      if (u && typeof u.streakCount === 'number') setStreak(u.streakCount);
+      if (u && typeof u.streakBest === 'number') setStreakBest(u.streakBest);
+      authedRef.current = true;
+      void refreshProgress();
       flashMsg(t('authWelcome'));
       return true;
     } catch {
       flashMsg(t('authFailed'));
       return false;
     }
-  }, [flashMsg, t]);
+  }, [flashMsg, t, refreshProgress]);
 
   const register = React.useCallback(
     async (email: string, password: string, name: string, asSeller?: boolean): Promise<boolean> => {
@@ -305,6 +385,11 @@ export function useGameState(): GameState {
         setAuthToken(readToken());
         persistUser(u);
         if (u && typeof u.coins === 'number') setCoins(u.coins);  // adopt account balance
+        if (u && typeof u.renown === 'number') setRenown(u.renown);
+        if (u && typeof u.streakCount === 'number') setStreak(u.streakCount);
+        if (u && typeof u.streakBest === 'number') setStreakBest(u.streakBest);
+        authedRef.current = true;
+        void refreshProgress();
         flashMsg(t('authWelcome'));
         return true;
       } catch {
@@ -312,7 +397,7 @@ export function useGameState(): GameState {
         return false;
       }
     },
-    [flashMsg, t],
+    [flashMsg, t, refreshProgress],
   );
 
   const logout = React.useCallback(() => {
@@ -320,6 +405,14 @@ export function useGameState(): GameState {
     persistUser(null);
     setAuthUser(null);
     setAuthToken(null);
+    // Drop server-owned progression back to guest defaults.
+    authedRef.current = false;
+    setRenown(0);
+    setStreak(0);
+    setStreakBest(0);
+    setQuests([]);
+    setEarnedVouchers([]);
+    setLeaderboard(null);
     // Drop the player back into the world as a guest — they respawn OUTSIDE the
     // perimeter fence (WorldScreen rebuilds the scene on logout) and must pass a
     // gate's ticket check again to re-enter.
@@ -334,16 +427,21 @@ export function useGameState(): GameState {
 
   const refresh = React.useCallback(async () => {
     if (!readToken()) return;
+    authedRef.current = true;
     try {
       const u = await api.me();
       setAuthUser(u);
       setAuthToken(readToken());
       persistUser(u);
       if (u && typeof u.coins === 'number') setCoins(u.coins);  // account balance is source of truth
+      if (u && typeof u.renown === 'number') setRenown(u.renown);
+      if (u && typeof u.streakCount === 'number') setStreak(u.streakCount);
+      if (u && typeof u.streakBest === 'number') setStreakBest(u.streakBest);
     } catch {
       /* offline — keep the cached user so seller affordances survive */
     }
-  }, []);
+    void refreshProgress();
+  }, [refreshProgress]);
 
   // Re-hydrate the auth user once on mount when a token is present.
   React.useEffect(() => { void refresh(); }, [refresh]);
@@ -354,6 +452,20 @@ export function useGameState(): GameState {
   }, []);
 
   const { level, progress: levelProgress } = React.useMemo(() => deriveLevel(coins), [coins]);
+  const rank = React.useMemo(() => deriveRank(renown), [renown]);
+  const earnedRewards = React.useMemo(() => earnedVouchers.map((v) => v.code), [earnedVouchers]);
+
+  // Fire a one-shot rank-up celebration when the derived rank crosses upward.
+  // The first effect run only seeds the baseline (prevRank null), so a
+  // returning player never gets a spurious popup on mount.
+  const [rankUp, setRankUp] = React.useState<number | null>(null);
+  const prevRankRef = React.useRef<number | null>(null);
+  React.useEffect(() => {
+    const idx = deriveRank(renown).index;
+    if (prevRankRef.current != null && idx > prevRankRef.current) setRankUp(idx);
+    prevRankRef.current = idx;
+  }, [renown]);
+  const dismissRankUp = React.useCallback(() => setRankUp(null), []);
   const cartCount = React.useMemo(() => cart.reduce((a, x) => a + x.qty, 0), [cart]);
   const cartTotal = React.useMemo(
     () => cart.reduce((a, x) => a + (VEYRA.productById(x.id)?.price ?? 0) * x.qty, 0),
@@ -378,6 +490,12 @@ export function useGameState(): GameState {
     screen, params, go, back,
     cart, addToCart, setQty, removeItem, clearCart, cartCount, cartTotal,
     coins, addCoins, level, levelProgress,
+    renown, rank, recordRenown,
+    rankUp, dismissRankUp,
+    streak, streakBest, checkin, streakReward, dismissStreakReward,
+    leaderboard, refreshLeaderboard,
+    quests, refreshProgress,
+    earnedRewards, earnedVouchers, hasReward,
     favorites, isFavorite, toggleFavorite,
     claimedQuests, claimQuest,
     usedVoucher, useVoucher,
@@ -389,9 +507,12 @@ export function useGameState(): GameState {
   }), [
     lang, player, screen, params, cart, coins, npcOpen, prodOpen, worldPanel, lite,
     cartCount, cartTotal, level, levelProgress,
+    renown, rank, rankUp, dismissRankUp, quests, earnedRewards, earnedVouchers,
+    streak, streakBest, streakReward, leaderboard,
     favorites, claimedQuests, usedVoucher,
     auth, authOpen, openAuth, closeAuth,
     t, go, back, addToCart, setQty, removeItem, clearCart, addCoins,
+    recordRenown, refreshProgress, hasReward, checkin, dismissStreakReward, refreshLeaderboard,
     isFavorite, toggleFavorite, claimQuest, useVoucher,
     openNPC, closeNPC, openProduct, closeProduct, openWorldPanel, closeWorldPanel, flashMsg,
   ]);

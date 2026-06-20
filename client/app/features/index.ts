@@ -8,5 +8,6 @@ export { CartScreen } from './cart/CartScreen';
 export { CheckoutScreen } from './checkout/CheckoutScreen';
 export { SuccessScreen } from './success/SuccessScreen';
 export { QuestsScreen } from './quests/QuestsScreen';
+export { PassportScreen } from './passport/PassportScreen';
 export { SellerScreen } from './seller/SellerScreen';
 export { MapEditorScreen } from './admin/MapEditorScreen';

@@ -271,6 +271,89 @@ export interface PublicUser {
   name: string;
   role: string;
   coins?: number;
+  renown?: number;
+  streakCount?: number;
+  streakBest?: number;
+}
+
+// ── Daily streak ───────────────────────────────────────────────────────────
+export interface ApiCheckinResult {
+  alreadyToday: boolean;
+  streak: number;
+  best: number;
+  reward: { coins: number; renown: number; voucherCode?: string };
+  renown: number;
+  rank: ApiRankInfo;
+}
+
+// ── Leaderboard ────────────────────────────────────────────────────────────
+export interface ApiLeaderRow {
+  position: number;
+  name: string;
+  avatarHue: number;
+  renown: number;
+  rankIndex: number;
+  rankName: I18nField;
+}
+
+export interface ApiLeaderboard {
+  top: ApiLeaderRow[];
+  me?: { position: number; renown: number; rankName: I18nField };
+}
+
+// ── Progression (Renown / Rank) ────────────────────────────────────────────
+export interface ApiRankDef {
+  index: number;
+  name: I18nField;
+  threshold: number;
+}
+
+export interface ApiProgressConfig {
+  ranks: ApiRankDef[];
+  sources: Record<string, { points: number; dailyCap: number }>;
+}
+
+export interface ApiRankInfo {
+  index: number;
+  name: I18nField;
+  threshold: number;
+  nextThreshold: number | null;
+  progress: number;
+}
+
+export interface ApiProgressResult {
+  renown: number;
+  rank: ApiRankInfo;
+  gained: number;
+}
+
+export interface ApiQuest {
+  _id: string;
+  key: string;
+  title: I18nField;
+  goal: { type: string; count: number };
+  reward?: { coins?: number; renown?: number; voucherId?: string };
+  source: string;
+  chapter: number;
+  daily?: boolean;
+  locked?: boolean;
+}
+
+export interface ApiUserQuest {
+  progress: number;
+  claimed: boolean;
+}
+
+export interface ApiQuestEntry {
+  quest: ApiQuest;
+  userQuest: ApiUserQuest | null;
+}
+
+export interface ApiVoucher {
+  _id: string;
+  code: string;
+  type: 'percent' | 'amount' | 'freeship';
+  value: number;
 }
 
 export interface AuthResult {
@@ -460,6 +543,42 @@ export const api = {
   /** Publish a draft map. */
   publishMap(mapId: string, opts?: RequestOptions): Promise<ApiMap> {
     return http.post<ApiMap>(`/maps/${encodeURIComponent(mapId)}/publish`, undefined, opts);
+  },
+
+  // ── Progression (Renown / Rank / quests / earned vouchers) ──
+  /** Public rank ladder + per-source rules (so thresholds aren't FE-hardcoded). */
+  getProgressionConfig(opts?: RequestOptions): Promise<ApiProgressConfig> {
+    return http.get<ApiProgressConfig>('/progression/config', opts);
+  },
+
+  /** Record one progress event (server applies daily caps + advances quests). */
+  recordProgress(event: string, opts?: RequestOptions): Promise<ApiProgressResult> {
+    return http.post<ApiProgressResult>('/me/progress', { event }, opts);
+  },
+
+  /** The caller's quest progress joined with each active quest definition. */
+  getMyQuests(opts?: RequestOptions): Promise<ApiQuestEntry[]> {
+    return http.get<ApiQuestEntry[] | { data: ApiQuestEntry[] }>('/me/quests', opts).then(asArray<ApiQuestEntry>);
+  },
+
+  /** Claim a completed quest's reward (coins + renown + voucher), once. */
+  claimMyQuest(questId: string, opts?: RequestOptions): Promise<ApiUserQuest> {
+    return http.post<ApiUserQuest>(`/me/quests/${encodeURIComponent(questId)}/claim`, undefined, opts);
+  },
+
+  /** Vouchers the caller owns (earned via milestones / redeemed). */
+  getMyVouchers(opts?: RequestOptions): Promise<ApiVoucher[]> {
+    return http.get<ApiVoucher[] | { data: ApiVoucher[] }>('/me/vouchers', opts).then(asArray<ApiVoucher>);
+  },
+
+  /** Daily streak check-in (idempotent within a day). */
+  checkin(opts?: RequestOptions): Promise<ApiCheckinResult> {
+    return http.post<ApiCheckinResult>('/me/checkin', undefined, opts);
+  },
+
+  /** Tastemaker leaderboard: top players by renown + the caller's position. */
+  getLeaderboard(limit = 20, opts?: RequestOptions): Promise<ApiLeaderboard> {
+    return http.get<ApiLeaderboard>('/leaderboard', { ...opts, query: { limit, ...(opts?.query || {}) } });
   },
 };
 

@@ -4,6 +4,9 @@ import type { Game } from '../../lib/game/types';
 
 export function SuccessScreen({ g }: { g: Game }) {
   React.useEffect(() => { g.clearCart(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // A completed order is the strongest proof-of-taste: post a purchase event;
+  // the server awards Renown and advances the purchase quests (once per mount).
+  React.useEffect(() => { g.recordRenown('purchase'); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <div className="v-screen v-success">
       <div className="v-splash-sky" />

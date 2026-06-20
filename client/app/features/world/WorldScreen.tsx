@@ -47,6 +47,10 @@ export function WorldScreen({ g }: { g: Game }) {
     wasAuthed.current = now;
   }, [g.auth.user]);
 
+  // Arriving in the plaza triggers the daily check-in (advances the streak +
+  // grants the escalating reward). Idempotent per day, server-side.
+  React.useEffect(() => { g.checkin(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   return g.lite ? <WorldLite g={g} /> : <World3D key={epoch} g={g} />;
 }
 
