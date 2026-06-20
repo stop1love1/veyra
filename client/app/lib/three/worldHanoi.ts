@@ -1809,6 +1809,13 @@ export function createVeyraWorld(container, opts) {
       g.rotation.y = Math.atan2(lakeCx - x, lakeCz - z);   // local +z faces the lake
       scene.add(g); return g;
     };
+    // Collision circle centred on the building BODY, which extends along local −z
+    // (away from the lake-facing doors). Rotate the offset by the group yaw so the
+    // blocker tracks the body regardless of facing, leaving the +z doors clear.
+    const pushBodyBlocker = (g, dist, r) => {
+      const a = g.rotation.y;
+      circles.push({ x: g.position.x - Math.sin(a) * dist, z: g.position.z - Math.cos(a) * dist, r });
+    };
     const warmLight = (g, y, dist) => {
       if (!withLight) return [];
       const pl = new THREE.PointLight(0xffd9a0, 0, dist, 2.0);
@@ -1854,7 +1861,7 @@ export function createVeyraWorld(container, opts) {
       const leaves = addDoubleDoor(g, 0, 0.12, 2.8, 4.4, darkWood);
       const lights = warmLight(g, 5, 26);
       const sg = statusSigns(g, naveW / 2 + 1.4, 2.6, 0.6);
-      circles.push({ x: g.position.x, z: g.position.z - 8, r: 9 });
+      pushBodyBlocker(g, 8, 9);
       registerLandmark({ ranges: [[8, 20]], leaves, glowMats: [gw], lights, ...sg });
     })();
 
@@ -1895,7 +1902,7 @@ export function createVeyraWorld(container, opts) {
       const leaves = addDoubleDoor(g, 0, 0.12, 3.0, 4.6, darkWood);
       const lights = warmLight(g, 5, 30);
       const sg = statusSigns(g, bodyW / 2 - 0.6, 2.6, 1.6);
-      circles.push({ x: g.position.x, z: g.position.z - 7, r: 10 });
+      pushBodyBlocker(g, 7, 10);
       // Tours 10:30–12:00 + evening performances 18:00–22:00.
       registerLandmark({ ranges: [[10.5, 12], [18, 22]], leaves, glowMats: [gw], lights, ...sg });
     })();
@@ -1935,7 +1942,7 @@ export function createVeyraWorld(container, opts) {
       const leaves = addDoubleDoor(g, 0, 0.12, 3.0, 4.0, darkWood);
       const lights = warmLight(g, 4, 28);
       const sg = statusSigns(g, bodyW / 2 - 0.6, 2.6, 0.6);
-      circles.push({ x: g.position.x, z: g.position.z - 6, r: 9 });
+      pushBodyBlocker(g, 6, 9);
       registerLandmark({ ranges: [[7.5, 21]], leaves, glowMats: [gw], lights, clock, ...sg });
     })();
   }
