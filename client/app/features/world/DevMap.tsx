@@ -16,6 +16,8 @@ interface Snapshot {
   water: number[][] | null;
   roads: { pts: number[][]; w?: number }[];
   buildings: { poly: number[][] }[];
+  pois?: { x: number; z: number; kind: string; name?: string }[];
+  barriers?: { pts: number[][]; kind: string }[];
   spawn: { x: number; z: number };
   places: Place[];
 }
@@ -93,6 +95,31 @@ function paintStatic(ctx: CanvasRenderingContext2D, snap: Snapshot, tf: FitTrans
     ctx.fillStyle = '#dcd5c8';
     ctx.fill();
     ctx.stroke();
+  }
+
+  // barriers (Phase-0 review hook) — thin dashed lines
+  if (snap.barriers && snap.barriers.length) {
+    ctx.save();
+    ctx.setLineDash([4, 3]); ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(120,90,60,0.7)';
+    for (const b of snap.barriers) {
+      if (!b.pts || b.pts.length < 2) continue;
+      ctx.beginPath();
+      for (let i = 0; i < b.pts.length; i++) {
+        const { px, py } = worldToCanvas(b.pts[i][0], b.pts[i][1], tf);
+        if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // pois (Phase-0 review hook) — small magenta squares
+  if (snap.pois && snap.pois.length) {
+    ctx.fillStyle = '#b3408a';
+    for (const p of snap.pois) {
+      const { px, py } = worldToCanvas(p.x, p.z, tf);
+      ctx.fillRect(px - 2.5, py - 2.5, 5, 5);
+    }
   }
 
   // places — coloured dot + label

@@ -1693,6 +1693,8 @@ export function createVeyraWorld(container, opts) {
       water: (lakePoly && lakePoly.length >= 3) ? lakePoly : null,
       roads: roadList.concat(outsideRoadList),     // [{ pts:[[x,z],...], w }]
       buildings: buildList,                        // [{ poly:[[x,z],...], h }]
+      pois: (data && Array.isArray(data.pois)) ? data.pois : [],
+      barriers: (data && Array.isArray(data.barriers)) ? data.barriers : [],
       spawn: { x: SPAWN.x, z: SPAWN.z },
     };
 
@@ -4649,6 +4651,8 @@ export function createVeyraWorld(container, opts) {
         water: worldMap.water,
         roads: worldMap.roads,
         buildings: worldMap.buildings,
+        pois: worldMap.pois || [],
+        barriers: worldMap.barriers || [],
         spawn: worldMap.spawn,
         places: interactables.map((it) => ({
           id: it.id, type: it.type, name: it.name, hue: it.hue,
