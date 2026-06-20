@@ -147,7 +147,7 @@ export function createVeyraWorld(container, opts) {
   // are single-quad soups (winding-agnostic) — this fixes shading + visibility.
   const FW = facades.tileWidth, FH = facades.tileHeight;
   for (const fm of facades.materials) {
-    fm.side = THREE.DoubleSide;            // walls are single-quad soups; DoubleSide fixes winding + shading
+    fm.side = THREE.FrontSide;             // wall winding is now outward-correct (see WALLS build) → cull interior faces so the camera never sees inside the hollow shell
     fm.vertexColors = true;                // per-building tint (set below) multiplies the shared map → kills the "copy-paste" look
     for (const mp of [fm.map, fm.emissiveMap, fm.roughnessMap]) {
       if (mp) { mp.wrapS = THREE.RepeatWrapping; mp.wrapT = THREE.RepeatWrapping; mp.repeat.set(1 / FW, 1 / FH); mp.needsUpdate = true; }
@@ -979,10 +979,20 @@ export function createVeyraWorld(container, opts) {
         // a0
         const A0 = [ax, 0, az], B0 = [bx, 0, bz], B1 = [bx, h, bz], A1 = [ax, h, az];
         const uA0 = [u0, 0], uB0 = [u1, 0], uB1 = [u1, h], uA1 = [u0, h];
-        // tri 1: a0, b0, b1
-        wpos.push(...A0, ...B0, ...B1); wuv.push(...uA0, ...uB0, ...uB1);
-        // tri 2: a0, b1, a1
-        wpos.push(...A0, ...B1, ...A1); wuv.push(...uA0, ...uB1, ...uA1);
+        // FRONT face must point OUTWARD (away from the footprint centroid) so the
+        // walls can be FrontSide-culled: when the camera clips inside a building it
+        // sees THROUGH the near wall to the street, never the hollow dark interior.
+        // The natural winding (A0,B0,B1) has horizontal normal (-ez, ex); flip the
+        // two tris when that points inward (handles CW *and* CCW OSM footprints).
+        const ex = bx - ax, ez = bz - az;
+        const mx = (ax + bx) / 2, mz = (az + bz) / 2;
+        if ((mx - cx2) * (-ez) + (mz - cz2) * ex >= 0) {
+          wpos.push(...A0, ...B0, ...B1); wuv.push(...uA0, ...uB0, ...uB1);
+          wpos.push(...A0, ...B1, ...A1); wuv.push(...uA0, ...uB1, ...uA1);
+        } else {
+          wpos.push(...A0, ...B1, ...B0); wuv.push(...uA0, ...uB1, ...uB0);
+          wpos.push(...A0, ...A1, ...B1); wuv.push(...uA0, ...uA1, ...uB1);
+        }
         perim = u1;
       }
       const wgeo = new THREE.BufferGeometry();
