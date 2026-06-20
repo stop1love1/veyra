@@ -20,6 +20,7 @@ export function Icon({ name, size = 22, sw = 1.8, style = {} }: IconProps) {
     chevL:   <path d="M15 5l-7 7 7 7" {...p}/>,
     chevR:   <path d="M9 5l7 7-7 7" {...p}/>,
     chevD:   <path d="M5 9l7 7 7-7" {...p}/>,
+    chevU:   <path d="M5 15l7-7 7 7" {...p}/>,
     plus:    <path d="M12 5v14M5 12h14" {...p}/>,
     minus:   <path d="M5 12h14" {...p}/>,
     heart:   <path d="M12 20s-7-4.6-9.2-9.2C1.3 7.6 3 4.5 6 4.5c2 0 3.2 1.2 4 2.4.8-1.2 2-2.4 4-2.4 3 0 4.7 3.1 3.2 6.3C19 15.4 12 20 12 20z" {...p}/>,

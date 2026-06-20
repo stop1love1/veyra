@@ -568,6 +568,44 @@ button:focus-visible,a:focus-visible,input:focus-visible,
 .v-enter-sub{color:rgba(234,252,248,.6);font-size:9px;}
 .v-enter-name{color:#fff;font-weight:700;font-size:15.5px;line-height:1.2;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .v-enter-card .v-btn{flex:none;}
+
+/* ─── World chat ─────────────────────────────────────────── */
+.v-chat-fab{position:absolute;z-index:19;right:14px;bottom:calc(84px + env(safe-area-inset-bottom));
+  display:grid;place-items:center;width:46px;height:46px;border-radius:999px;cursor:pointer;
+  background:rgba(16,38,40,.62);border:1px solid rgba(255,255,255,.16);backdrop-filter:blur(12px);
+  color:#eafcf8;transition:transform .15s,background .15s;}
+.v-chat-fab:hover{background:rgba(255,255,255,.08);} .v-chat-fab:active{transform:scale(.9);}
+/* ── Character setup: live 3D preview + age slider ─────────────────────── */
+.v-avatar-3d{width:min(72vw,260px);height:300px;}
+.v-avatar-3d::after{display:none;}
+.v-avatar-3d canvas{width:100%!important;height:100%!important;border-radius:18px;}
+.v-age-slider{-webkit-appearance:none;appearance:none;width:100%;height:6px;border-radius:999px;outline:none;cursor:pointer;
+  background:linear-gradient(90deg,var(--brand),color-mix(in oklab,var(--brand),#fff 40%));}
+.v-age-slider::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:22px;height:22px;border-radius:50%;
+  background:#fff;border:2px solid var(--brand);box-shadow:0 2px 6px rgba(0,0,0,.25);cursor:pointer;}
+.v-age-slider::-moz-range-thumb{width:22px;height:22px;border-radius:50%;background:#fff;border:2px solid var(--brand);cursor:pointer;}
+.v-age-val{color:var(--brand);font-variant-numeric:tabular-nums;font-weight:700;}
+/* ── Emote control (FAB + popover); sits just above the chat FAB ───────── */
+.v-emote-wrap{position:absolute;z-index:19;right:14px;bottom:calc(140px + env(safe-area-inset-bottom));
+  display:flex;flex-direction:column;align-items:flex-end;gap:8px;}
+.v-emote-fab{display:grid;place-items:center;width:46px;height:46px;border-radius:999px;cursor:pointer;color:#eafcf8;
+  background:rgba(16,38,40,.62);border:1px solid rgba(255,255,255,.16);backdrop-filter:blur(12px);transition:transform .15s,background .15s;}
+.v-emote-fab:hover{background:rgba(255,255,255,.08);} .v-emote-fab:active{transform:scale(.9);}
+.v-emote-fab.is-on{background:color-mix(in oklab,var(--brand),transparent 40%);}
+.v-emote-pop{display:flex;flex-direction:column;gap:6px;animation:flashin2 .18s ease;}
+.v-emote-btn{display:flex;align-items:center;gap:8px;padding:9px 14px;border-radius:999px;cursor:pointer;white-space:nowrap;
+  color:#eafcf8;font-size:13px;font-weight:600;background:rgba(16,38,40,.72);border:1px solid rgba(255,255,255,.16);backdrop-filter:blur(12px);transition:background .15s;}
+.v-emote-btn:hover{background:rgba(255,255,255,.1);}
+.v-emote-emoji{font-size:16px;line-height:1;}
+.v-chat-bar{position:absolute;z-index:21;left:16px;right:16px;bottom:calc(82px + env(safe-area-inset-bottom));
+  display:flex;align-items:center;gap:8px;animation:flashin2 .2s ease;}
+.v-chat-input{flex:1;min-width:0;height:42px;padding:0 16px;border-radius:999px;
+  background:rgba(16,38,40,.72);border:1px solid rgba(255,255,255,.18);backdrop-filter:blur(12px);
+  color:#eafcf8;font-size:15px;outline:none;}
+.v-chat-input::placeholder{color:rgba(234,252,248,.45);}
+.v-chat-input:focus{border-color:rgba(21,214,180,.7);}
+.v-chat-bar .v-btn{flex:none;}
+
 /* Elevator floor picker (reuses the glass prompt card). */
 .v-floor-pick{padding:9px 12px 9px 16px;}
 .v-floor-btns{display:flex;gap:7px;flex:none;}

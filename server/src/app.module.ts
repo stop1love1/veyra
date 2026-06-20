@@ -14,6 +14,7 @@ import { NpcsModule } from './npcs/npcs.module';
 import { OrdersModule } from './orders/orders.module';
 import { ProductsModule } from './products/products.module';
 import { QuestsModule } from './quests/quests.module';
+import { RealtimeModule } from './realtime/realtime.module';
 import { ShopsModule } from './shops/shops.module';
 import { UsersModule } from './users/users.module';
 import { validateEnv } from './config/env.validation';
@@ -43,6 +44,7 @@ import { VouchersModule } from './vouchers/vouchers.module';
     OrdersModule,
     QuestsModule,
     VouchersModule,
+    RealtimeModule,
   ],
   controllers: [AppController],
   providers: [

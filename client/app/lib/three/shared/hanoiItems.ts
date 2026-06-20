@@ -80,7 +80,7 @@ export function createHanoiItems(THREEarg) {
   const fabricTint = std(0xffffff, 0.9, 0.0, { side: T.DoubleSide }); // awnings / parasols
   const signTint = std(0xffffff, 0.6, 0.1, { emissive: hsl(0, 0, 0), emissiveIntensity: 0.0 });
   // Skin (people heads/arms).
-  const skin = std(hsl(28, 0.4, 0.72), 0.7, 0.0);
+  const skin = std(hsl(28, 0.38, 0.68), 0.7, 0.0);
   // Foliage (planters).
   const leaf = std(hsl(120, 0.42, 0.34), 0.9, 0.0, { side: T.DoubleSide, flatShading: true });
   // Drooping overhead WIRES — near-black, faintly glossy.
@@ -89,7 +89,7 @@ export function createHanoiItems(THREEarg) {
   const bulb = M(new T.MeshStandardMaterial({ color: 0xfff3d2, emissive: 0xffe2a0, emissiveIntensity: 1.4, roughness: 0.4 }));
   const headlight = M(new T.MeshStandardMaterial({ color: 0xfffbe8, emissive: 0xfff0b0, emissiveIntensity: 0.9, roughness: 0.4 }));
   // Warm paper-lantern body + shared hanging-sign board (both ramp at dusk).
-  const lanternMat = M(new T.MeshStandardMaterial({ color: 0xff7a3c, emissive: 0xff5a1e, emissiveIntensity: 0.6, roughness: 0.5 }));
+  const lanternMat = M(new T.MeshStandardMaterial({ color: 0xff8a4e, emissive: 0xff5a1e, emissiveIntensity: 0.6, roughness: 0.5 }));
   const signEmissive = M(new T.MeshStandardMaterial({ color: 0xffffff, roughness: 0.55, metalness: 0.05, emissive: 0xffffff, emissiveIntensity: 0.18 }));
 
   // Night ramp: [material, baseIntensity]. setNightFactor(0)=day, (1)=full night.
@@ -101,7 +101,7 @@ export function createHanoiItems(THREEarg) {
 
   // Terracotta pot + ripe-kumquat orange (potted ornamental trees / cây cảnh).
   const terracotta = std(hsl(18, 0.45, 0.42), 0.85, 0.0);
-  const fruitOrange = std(hsl(30, 0.85, 0.5), 0.6, 0.0);
+  const fruitOrange = std(hsl(30, 0.75, 0.52), 0.6, 0.0);
   // Red propaganda banner cloth + its yellow band; brass-ish birdcage.
   const bannerRed = std(hsl(0, 0.72, 0.42), 0.85, 0.0, { side: T.DoubleSide });
   const bannerYellow = std(hsl(48, 0.85, 0.55), 0.8, 0.0, { side: T.DoubleSide });
@@ -720,7 +720,7 @@ export function createHanoiItems(THREEarg) {
 
     const redL = M(new T.MeshStandardMaterial({ color: 0xff3322, emissive: 0xff2200, emissiveIntensity: 0.9, roughness: 0.4 }));
     const amberL = M(new T.MeshStandardMaterial({ color: 0xffbb22, emissive: 0xffaa00, emissiveIntensity: 0.5, roughness: 0.4 }));
-    const greenL = M(new T.MeshStandardMaterial({ color: 0x33dd55, emissive: 0x22cc44, emissiveIntensity: 0.5, roughness: 0.4 }));
+    const greenL = M(new T.MeshStandardMaterial({ color: 0x2bd24a, emissive: 0x22cc44, emissiveIntensity: 0.5, roughness: 0.4 }));
 
     const pole = imesh(poleGeo, metalDark, n);
     const head = imesh(headGeo, metalDark, n);

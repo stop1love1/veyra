@@ -38,6 +38,8 @@ export interface Player {
   hue: number;
   skin?: number;
   style?: string;
+  /** Character age (6–70). Drives body proportions + face in the 3D avatar. */
+  age?: number;
 }
 
 export interface CartLine {
