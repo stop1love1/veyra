@@ -3876,10 +3876,16 @@ export function createVeyraWorld(container, opts) {
     if (camTarget.y < 0.5) camTarget.y = 0.5;     // ground/lake clamp
     camera.position.lerp(camTarget, Math.min(1, dt * 9));
     if (camera.position.y < 0.5) camera.position.y = 0.5;
-    // Drag DOWN past the camera floor (camElev → negative) lifts the look point high
-    // above the head so the view tilts UP toward the sky, camera staying put.
-    const lookLift = Math.max(0, 0.05 - camElevCur) * camDcur * 10;
-    tmp.set(pp.x, pivotY + lookLift, pp.z);
+    // Default: look at the head. Dragging DOWN past the camera floor tilts the VIEW
+    // up toward the sky — capped at ~72° so the lookAt never reaches true vertical
+    // (which rolls the horizon / gimbal-locks). The look point rises along the player's
+    // vertical axis to hit exactly that pitch from the camera's current position.
+    tmp.set(pp.x, pivotY, pp.z);
+    const upAmt = Math.min(1, Math.max(0, 0.05 - camElevCur) / 0.6);
+    if (upAmt > 0) {
+      const D = camDcur * Math.cos(posElev);
+      tmp.y = camera.position.y + D * Math.tan(upAmt * 1.26);   // rise to ~72° max
+    }
     if (!lookInit) { lookTarget.copy(tmp); lookInit = true; }
     lookTarget.x = damp(lookTarget.x, tmp.x, 16);
     lookTarget.y = damp(lookTarget.y, tmp.y, 16);
