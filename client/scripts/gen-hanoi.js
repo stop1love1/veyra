@@ -121,8 +121,17 @@ out geom;`;
     }
   }
 
-  // Lake first: the largest water polygon (Hoan Kiem) drives the landmark cluster.
-  waters.sort((a, b) => area2(b) - area2(a));
+  // Lake = the largest water polygon NEAR the origin (Hoan Kiem) — NOT a distant river.
+  // A wider capture pulls in the Red River, whose relation geometry sprawls many km and
+  // would otherwise hijack water[0] (the world uses water[0] as THE lake and places the
+  // whole landmark cluster on it). Drop waters whose geometry leaves the captured disc,
+  // then force Hoan Kiem (largest water with a near-origin centroid) to the front.
+  const inDisc = (poly) => poly.every((p) => Math.hypot(p[0], p[1]) <= R * 1.1);
+  const nearOrigin = (poly) => { const [cx, cz] = centroid(poly); return Math.hypot(cx, cz) < 600; };
+  const cleanWaters = waters.filter(inDisc).sort((a, b) => area2(b) - area2(a));
+  const lakeIdx = cleanWaters.findIndex((p) => nearOrigin(p) && area2(p) > 40000);
+  if (lakeIdx > 0) { const [lk] = cleanWaters.splice(lakeIdx, 1); cleanWaters.unshift(lk); }
+  waters.length = 0; waters.push(...cleanWaters);
 
   const extentR = Math.round(R * 10) / 10;
   const out = { center: { lat0: LAT0, lon0: LON0 }, extentR, buildings, roads, trees, greens, water: waters };

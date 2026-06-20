@@ -34,10 +34,12 @@ export interface PlayerState {
   x: number;
   z: number;
   rotY: number;
-  anim: 'idle' | 'walk' | 'sit';
+  anim: 'idle' | 'walk' | 'sit' | 'gsit' | 'lie';
   seatId: string | null;
   msg?: string; // latest chat text
   msgAt?: number; // server ms of the latest chat
+  emote?: string; // latest emote/action name
+  emoteAt?: number; // server ms of the latest emote
 }
 
 export const SEAT_PITCH = 0.7; // metres between adjacent sitters

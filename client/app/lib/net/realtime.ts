@@ -22,7 +22,7 @@ export interface LocalState {
   x: number;
   z: number;
   rotY: number;
-  anim: 'idle' | 'walk' | 'sit';
+  anim: 'idle' | 'walk' | 'sit' | 'gsit' | 'lie';
   seatId: string | null;
 }
 
@@ -39,6 +39,7 @@ export interface RealtimeClient {
   claimSeat(seatId: string): void;
   releaseSeat(): void;
   sendChat(text: string): void;
+  sendEmote(name: string): void;
   dispose(): void;
 }
 
@@ -107,6 +108,10 @@ export function createRealtime(
     sendChat(text) {
       const t = (text || '').trim();
       if (t) socket.emit('chat', { text: t });
+    },
+    sendEmote(name) {
+      const n = (name || '').trim();
+      if (n) socket.emit('emote', { name: n });
     },
     dispose() {
       try {

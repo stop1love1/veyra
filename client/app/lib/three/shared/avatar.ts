@@ -58,12 +58,24 @@ export const EXPRESSIONS = {
   surprised: { eyeOpen: 1.35, browY: 0.018, browTilt: 0.0,  mouth: 'open' },
   sad:       { eyeOpen: 0.85, browY: 0.004, browTilt: 0.10, mouth: 'frown' },
   angry:     { eyeOpen: 0.95, browY: -0.012, browTilt: -0.12, mouth: 'frown' },
+  love:      { eyeOpen: 0.7, browY: 0.006, browTilt: 0.05, mouth: 'smile' },
+  sleepy:    { eyeOpen: 0.22, browY: -0.006, browTilt: 0.04, mouth: 'flat' },
 };
 
-/** Emote clips: duration (s) and which expression they wear. */
+/** Emote clips: duration (s) and which expression they wear. The pose for each is
+ *  defined in update() and blended through an ease-in/out envelope. `celebrate` is
+ *  a legacy alias of `dance`. */
 export const EMOTES = {
-  wave:      { dur: 2.2, expr: 'happy' },
-  celebrate: { dur: 2.6, expr: 'happy' },
+  wave:           { dur: 2.2, expr: 'happy' },
+  dance:          { dur: 3.2, expr: 'happy' },
+  celebrate:      { dur: 2.6, expr: 'happy' },
+  bow:            { dur: 1.8, expr: 'neutral' },
+  clap:           { dur: 2.2, expr: 'happy' },
+  point:          { dur: 1.8, expr: 'neutral' },
+  'arms-crossed': { dur: 2.6, expr: 'neutral' },
+  think:          { dur: 2.6, expr: 'neutral' },
+  laugh:          { dur: 2.6, expr: 'happy' },
+  cry:            { dur: 2.8, expr: 'sad' },
 };
 
 /* ================================ the avatar ============================== */
@@ -212,6 +224,46 @@ export function buildAvatar(cfg = {}) {
     }
     const emoteExpr = f.emote ? EMOTES[f.emote].expr : null;
 
+    // ── Emote pose TARGETS (rest = 0), blended by an ease-in/out envelope so the
+    //    action flows in and out instead of snapping. Applied (eased) further down. ──
+    let aLz = 0, aLx = 0, aRz = 0, aRx = 0, eTorsoX = 0, eHeadX = 0, eHeadY = 0, env = 0;
+    if (f.emote) {
+      const tt = f.emoteT, dur = EMOTES[f.emote].dur;
+      env = clamp(Math.min(tt / 0.28, (dur - tt) / 0.4, 1), 0, 1);   // ramp up then down
+      switch (f.emote) {
+        case 'wave':
+          aRz = -2.0; aRx = -0.2 + Math.sin(tt * 11) * 0.5; break;
+        case 'dance':
+        case 'celebrate': {
+          const pump = Math.sin(tt * 9) * 0.35;
+          aLz = 1.8; aRz = -1.8; aLx = -1.3 + pump; aRx = -1.3 - pump;
+          eHeadY = Math.sin(tt * 4.5) * 0.18; eTorsoX = -0.05; break;
+        }
+        case 'clap': {
+          const c = Math.sin(tt * 10) * 0.5 + 0.5;   // hands together ↔ apart
+          aLx = -1.25; aRx = -1.25; aLz = 0.30 + c * 0.4; aRz = -0.30 - c * 0.4; break;
+        }
+        case 'bow':
+          eTorsoX = 0.95; eHeadX = 0.30; aLz = 0.25; aRz = -0.25; aLx = -0.2; aRx = -0.2; break;
+        case 'point':
+          aRx = -1.5; aRz = -0.15; eHeadY = -0.10; break;
+        case 'arms-crossed':
+          aLz = 0.95; aRz = -0.95; aLx = -1.15; aRx = -1.15; break;
+        case 'think':
+          aRx = -1.65; aRz = -0.55; eHeadX = 0.12; eHeadY = 0.12; break;
+        case 'laugh': {
+          // lean back, a hand near the belly, shoulders bobbing with the laugh
+          const bob = Math.sin(tt * 11) * 0.12;
+          aRx = -0.9 + bob; aRz = -0.35; aLx = -0.3; eTorsoX = -0.12; eHeadX = -0.08; break;
+        }
+        case 'cry': {
+          // both hands up toward the face, head bowed, a small tremble
+          const tremble = Math.sin(tt * 16) * 0.06;
+          aLx = -1.7 + tremble; aRx = -1.7 - tremble; eHeadX = 0.18; break;
+        }
+      }
+    }
+
     // ── Blink: quick dip every few seconds (faster when young). ──
     f.blinkTimer -= dt * rate;
     if (f.blinkTimer <= 0) { f.blinkTimer = 2.4 + Math.random() * 3.2; f.blink = 0; }
@@ -250,32 +302,25 @@ export function buildAvatar(cfg = {}) {
     }
     f.lookYaw += (f.tgtYaw - f.lookYaw) * Math.min(1, dt * 3);
     f.lookPitch += (f.tgtPitch - f.lookPitch) * Math.min(1, dt * 3);
-    headGroup.rotation.y = f.lookYaw;
-    headGroup.rotation.x = (f.baseHeadTilt || 0) + f.lookPitch;
+    headGroup.rotation.y = f.lookYaw + eHeadY * env;
+    headGroup.rotation.x = (f.baseHeadTilt || 0) + f.lookPitch + eHeadX * env;
 
     // ── Idle breathing: a tiny chest rise when standing. ──
     const breath = moving ? 0 : Math.sin(performance.now() * 0.0016) * 0.012;
     torso.scale.y = 1 + breath;
 
-    // ── Emote arm poses (override the loop's rested arms while playing). ──
+    // ── Apply the emote pose by EASING toward the enveloped targets (no snaps).
+    //    arm-Z is always eased (rest = 0) so it flows back out smoothly after the
+    //    emote; arm-X is only driven WHILE emoting, then the world loop's walk-swing
+    //    takes back over from ~rest. Torso tilt layers onto the age stoop. ──
+    const ek = Math.min(1, dt * 12);
+    armL.rotation.z += (aLz * env - armL.rotation.z) * ek;
+    armR.rotation.z += (aRz * env - armR.rotation.z) * ek;
     if (f.emote) {
-      const tt = f.emoteT;
-      if (f.emote === 'wave') {
-        // Right arm up, hand waggling side to side.
-        armR.rotation.z = -2.1;
-        armR.rotation.x = Math.sin(tt * 12) * 0.5;
-        armL.rotation.x = 0;
-      } else if (f.emote === 'celebrate') {
-        // Both arms up, a little alternating pump + a bounce.
-        armL.rotation.z = 1.9; armR.rotation.z = -1.9;
-        const pump = Math.sin(tt * 9) * 0.3;
-        armL.rotation.x = -1.4 + pump; armR.rotation.x = -1.4 - pump;
-        grp.position.y = (grp.userData._baseY || grp.position.y);
-      }
-    } else {
-      // Release any emote-only roll so the loop's swing reads cleanly again.
-      armL.rotation.z = 0; armR.rotation.z = 0;
+      armL.rotation.x += (aLx * env - armL.rotation.x) * ek;
+      armR.rotation.x += (aRx * env - armR.rotation.x) * ek;
     }
+    torso.rotation.x = (f.baseHeadTilt || 0) * 0.6 + eTorsoX * env;
   }
 
   const avatar = {

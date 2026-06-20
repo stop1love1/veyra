@@ -46,6 +46,48 @@ import { buildSocialBenches, benchSlots, occupiedSeats } from './shared/benches'
 import { createHanoiFacades } from './shared/hanoiFacades';
 import { createHanoiItems } from './shared/hanoiItems';
 import { createHanoiAmbience } from './shared/hanoiAmbience';
+import { resolveTeleport } from './shared/devMapGeom';
+import { ribbonEdges } from './shared/roadGeom';
+
+// Split a road network at the fence circle (radius R, centred on origin). Returns
+// { inside, outside } — two road lists ([{pts,w}]) where every polyline lies
+// wholly on one side, polylines crossing the circle are cut at the boundary so the
+// inside half keeps the detailed 3D street and the outside half becomes a flat
+// "real map" line. Edges crossing the circle are assumed to cross once (road
+// segments are short relative to R), which is true for the Hanoi data.
+function splitRoadsByFence(roadList, R) {
+  const inside = [], outside = [];
+  const R2 = R * R;
+  const inR = (p) => (p[0] * p[0] + p[1] * p[1]) <= R2;
+  // Point on segment a→b at radius exactly R (a and b straddle the circle).
+  const cross = (a, b) => {
+    const dx = b[0] - a[0], dz = b[1] - a[1];
+    const A = dx * dx + dz * dz || 1;
+    const B = 2 * (a[0] * dx + a[1] * dz);
+    const C = a[0] * a[0] + a[1] * a[1] - R2;
+    const disc = Math.max(0, B * B - 4 * A * C), sq = Math.sqrt(disc);
+    let t = (-B - sq) / (2 * A);
+    if (t < 0 || t > 1) t = (-B + sq) / (2 * A);
+    t = Math.max(0, Math.min(1, t));
+    return [a[0] + dx * t, a[1] + dz * t];
+  };
+  for (const road of roadList) {
+    const pts = road.pts;
+    if (!pts || pts.length < 2) continue;
+    const w = road.w;
+    const flush = (cls, poly) => { if (poly.length >= 2) (cls ? inside : outside).push({ pts: poly.slice(), w }); };
+    let run = [pts[0]], runIn = inR(pts[0]);
+    for (let i = 1; i < pts.length; i++) {
+      const a = pts[i - 1], b = pts[i], bIn = inR(b);
+      if (bIn === runIn) { run.push(b); continue; }
+      const c = cross(a, b);
+      run.push(c); flush(runIn, run);
+      run = [c, b]; runIn = bIn;
+    }
+    flush(runIn, run);
+  }
+  return { inside, outside };
+}
 
 export function createVeyraWorld(container, opts) {
   opts = opts || {};
@@ -542,7 +584,6 @@ export function createVeyraWorld(container, opts) {
   // Orbit-zoom range. CAM_MAX is raised to ~extentR*0.7 in build() so the player can
   // pull WAY back to an aerial survey of the whole Old Quarter, then zoom to street level.
   let CAM_MIN = 5, CAM_MAX = 420, CAM_ELEV_MAX = 1.5;
-  let skylinePlaced = 0;                       // count of procedural backdrop boxes
 
   // ── Lake (Three.js Water) + wind + GLB/anim state ─────────
   let water = null;            // reflective animated lake
@@ -581,9 +622,11 @@ export function createVeyraWorld(container, opts) {
   let localSeatId = null;            // the seat this client currently sits in
   let pendingSeatId = null;          // a claim awaiting server grant
   let sitting = false;               // local player is seated
+  let pose = null;                   // free ground pose: null | 'gsit' (sit) | 'lie'
   let nearestFreeSeatId = null;      // nearest sittable seat for the prompt
   let lastSitSig = '';               // change-detector for opts.onSit
   const SEAT_Y = 0.46;               // avatar lift when sitting on a bench
+  const GSIT_Y = -0.22;              // body drop for a free ground-sit (butt to floor)
   const SIT_REACH = 2.2;             // how close to a seat to offer "sit"
   // Chat: floating speech bubbles above heads (local + remote), auto-fading.
   const bubbles = new Map();         // id -> { sprite, group, until }
@@ -596,6 +639,9 @@ export function createVeyraWorld(container, opts) {
   // Unauthenticated players spawn OUTSIDE the fence and must clear a gate's
   // ticket check to come in. `entered` flips true once they're inside the ring.
   let fenceR = 0;                              // perimeter fence radius (set in build)
+  let outerRoam = 0;                           // how far a guest may roam OUTSIDE the fence (set in build; full map extent)
+  let worldMap = null;                         // top-down geometry snapshot for the dev teleport map (set in build)
+  let snapCam = false;                         // teleport requested an instant camera cut (consumed next frame)
   // Inside the fence? Signed-in players start inside; a guest who previously
   // cleared a gate resumes inside too (the saved position carries an `entered`
   // flag so a reload doesn't kick them back out to the gate).
@@ -630,8 +676,17 @@ export function createVeyraWorld(container, opts) {
     mats.applyPBR && mats.applyPBR({ asphalt: asphaltSet, paving: pavingSet, plaster: plasterSet });
 
     const extentR = data && data.extentR ? data.extentR : 457;
-    MAXR = extentR + 30;
-    fenceR = MAXR + 4;                      // fence sits just beyond the clamp radius
+    // 3D city CORE radius. The real street grid is dense out to ~extentR (~730 m);
+    // we keep only the central CITY_R as the 3D city (the Hoàn Kiếm lake, its
+    // landmarks + shops and the surrounding blocks, all within ~340 m) and render
+    // everything beyond it as a flat "real map" — the genuine street network drawn
+    // as map lines that the player walks out onto. Smaller core → more visible map
+    // outside the fence. Must stay > the lake's reach (~340 m) so the lake scene
+    // sits wholly inside the 3D city.
+    const CITY_R = 420;                     // 3D city core: buildings kept within this
+    const APRON = 36;                       // clear ring (no houses) between the last buildings and the fence/gate
+    MAXR = CITY_R + APRON;                  // player clamp — they can walk the apron right up to the fence
+    fenceR = MAXR + 4;                      // fence + gates sit ~APRON clear of the nearest house
     const WORLD_R = extentR * 1.25;
     const SKYLINE_OUTER = extentR * 2.6;   // procedural skyline reaches to here
 
@@ -935,6 +990,15 @@ export function createVeyraWorld(container, opts) {
       let br = 0; for (const p of b.poly) br = Math.max(br, Math.hypot(p[0] - x, p[1] - z));
       return !landmarkSites.some((s) => Math.hypot(x - s.cx, z - s.cz) < s.clearR + br);
     });
+    // Keep ONLY buildings that lie WHOLLY inside CITY_R — which is APRON metres
+    // INSIDE the fence. This leaves a clear ring (no houses) in front of the fence +
+    // gates so they aren't jammed against the buildings, and guarantees no wall is
+    // ever bisected by the fence. Everything beyond becomes the flat "real map".
+    buildList = buildList.filter((b) => {
+      if (!b.poly || b.poly.length < 3) return false;
+      for (const p of b.poly) if (p[0] * p[0] + p[1] * p[1] > CITY_R * CITY_R) return false;
+      return true;
+    });
     // LOW tier: cap to the ~350 buildings nearest the lake centre (keep the core).
     if (q.tier === 'low' && buildList.length > 350) {
       buildList = buildList
@@ -1168,72 +1232,28 @@ export function createVeyraWorld(container, opts) {
     }
     // (drawCalls === number of non-empty façade buckets, ≤ 14, for all buildings.)
 
-    // ──────────── GREATER-HANOI SKYLINE — procedural surroundings ─────────
-    // Beyond the real OSM core the city must continue to the horizon, not end in
-    // empty grass. We scatter low-detail extruded box "buildings" on a jittered
-    // grid across the annulus [extentR+20, SKYLINE_OUTER], DENSER near the core and
-    // thinning toward the horizon, tinted with the same muted Hanoi façade hues.
-    // They're MERGED by material (a few draw calls), static (matrixAutoUpdate off),
-    // and carry NO collision + NO shadow — pure backdrop framing the playable core.
-    (function proceduralSkyline() {
-      // Own cheap plaster mats — the far backdrop staying flat-coloured is fine.
-      const SKY_HUES = [40, 200, 12, 120, 210, 35, 180];
-      const skylineMats = SKY_HUES.map((h) => mats.plaster(h));
-      localMats.push(...skylineMats);
-      const cap = q.tier === 'low' ? 80 : q.tier === 'mid' ? 250 : 500;
-      // Start the backdrop a clean band OUTSIDE the fence so the guest's
-      // outside-the-gate apron (≤ fenceR+30) stays clear of skyline boxes.
-      const inner = MAXR + 40;
-      const outer = SKYLINE_OUTER;
-      const cell = 26;                       // grid pitch (metres)
-      const half = Math.ceil(outer / cell);
-      const sbuckets = SKY_HUES.map(() => []);
-      let placed = 0;
-      const unit = new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0); // base at y=0
-      for (let gx = -half; gx <= half && placed < cap; gx++) {
-        for (let gz = -half; gz <= half && placed < cap; gz++) {
-          // jittered cell centre
-          const jx = (hash01(gx * 1.3 + 0.7, gz * 2.1) - 0.5) * cell * 0.7;
-          const jz = (hash01(gz * 1.7 + 4.4, gx * 0.9) - 0.5) * cell * 0.7;
-          const x = gx * cell + jx, z = gz * cell + jz;
-          const r = Math.hypot(x, z);
-          if (r < inner || r > outer) continue;
-          // density thins toward the horizon: keep-probability falls from 1 → ~0.18.
-          const tt = (r - inner) / (outer - inner);            // 0 at core edge, 1 at horizon
-          const keepP = 0.92 * (1 - tt) + 0.12;
-          if (hash01(x * 0.31, z * 0.27) > keepP) continue;
-          // varied footprint + height (shorter on average toward the edge)
-          const w = 8 + hash01(x + 1.1, z) * 18;
-          const dpt = 8 + hash01(x, z + 2.3) * 18;
-          const h = (8 + hash01(x * 2.2, z * 1.4) * 30) * (1 - tt * 0.45);
-          const g = unit.clone();
-          g.scale(w, h, dpt);
-          g.translate(x, 0, z);
-          const bk = Math.floor(hash01(x + 5.5, z - 3.3) * SKY_HUES.length) % SKY_HUES.length;
-          sbuckets[bk].push(g);
-          placed++;
-        }
-      }
-      unit.dispose();
-      for (let m = 0; m < SKY_HUES.length; m++) {
-        const list = sbuckets[m];
-        if (!list.length) continue;
-        const merged = mergeGeometries(list, false);
-        for (const g of list) g.dispose();
-        if (!merged) continue;
-        ownedGeoms.push(merged);
-        const mesh = new THREE.Mesh(merged, skylineMats[m]);
-        mesh.castShadow = false; mesh.receiveShadow = false;
-        mesh.matrixAutoUpdate = false; mesh.updateMatrix();
-        scene.add(mesh);
-      }
-      skylinePlaced = placed;
-    })();
+    // ──────────── OUTSIDE THE FENCE — flat real map, no skyline ───────────
+    // The procedural greater-Hanoi skyline (extruded box "buildings" out to the
+    // horizon) was removed: outside the fence is now a flat real map — road lines
+    // + green patches over open ground — so the player roams the real street
+    // network instead of a fake backdrop.
 
     // ───────────────── ROADS — the real street network ───────────────────
     // Each polyline + width → a flat triangle strip (each segment offset ±w/2
     // perpendicular). All roads merge into ONE asphalt geometry at y=0.04.
-    const roadList = (data && data.roads) ? data.roads : [];
+    // The fence splits the world: INSIDE → the full 3D street (asphalt, kerbs,
+    // pavements, lane paint, lamps, signage); OUTSIDE → a flat "real map" of road
+    // lines only. `roadList` is the inside half from here on, so every downstream
+    // builder (detailing, puddles, props, signage, spawn) stays within the fence.
+    const roadListFull = (data && data.roads) ? data.roads : [];
+    const roadSplit = splitRoadsByFence(roadListFull, fenceR);
+    const roadList = roadSplit.inside;
+    const outsideRoadList = roadSplit.outside;
+    // Let a roaming guest reach the far edge of the real road network (then a small
+    // margin), instead of the old thin fence+30 apron.
+    let outsideMaxR = fenceR;
+    for (const r of outsideRoadList) for (const p of r.pts) { const rr = Math.hypot(p[0], p[1]); if (rr > outsideMaxR) outsideMaxR = rr; }
+    outerRoam = outsideMaxR + 30;
     const roadGeoms = [];
     for (const r of roadList) {
       const pts = r.pts;
@@ -1244,14 +1264,12 @@ export function createVeyraWorld(container, opts) {
       const idx = [];
       let base = 0;
       const US = 0.12;   // planar UV scale (world metres → texture units) so asphalt tiles
+      // Miter-join offsets: one shared left/right pair per vertex so the quads
+      // each side of a bend meet exactly (no wedge gap on the outside of curves).
+      const { left, right } = ribbonEdges(pts, hw);
       for (let i = 0; i < pts.length - 1; i++) {
-        const a = pts[i], b = pts[i + 1];
-        const dx = b[0] - a[0], dz = b[1] - a[1];
-        const len = Math.hypot(dx, dz) || 1;
-        const nx = -dz / len, nz = dx / len; // unit perpendicular
         // quad: a-left, a-right, b-left, b-right (y handled by mesh position)
-        const al = [a[0] + nx * hw, a[1] + nz * hw], ar = [a[0] - nx * hw, a[1] - nz * hw];
-        const bl = [b[0] + nx * hw, b[1] + nz * hw], br = [b[0] - nx * hw, b[1] - nz * hw];
+        const al = left[i], ar = right[i], bl = left[i + 1], br = right[i + 1];
         pos.push(al[0], 0, al[1], ar[0], 0, ar[1], bl[0], 0, bl[1], br[0], 0, br[1]);
         // Planar XZ UVs → the asphalt grain actually tiles (was flat without UVs).
         uv.push(al[0] * US, al[1] * US, ar[0] * US, ar[1] * US, bl[0] * US, bl[1] * US, br[0] * US, br[1] * US);
@@ -1276,6 +1294,51 @@ export function createVeyraWorld(container, opts) {
         const roadMesh = new THREE.Mesh(roadMerged, mats.asphalt);
         roadMesh.position.y = 0.14; roadMesh.receiveShadow = true;
         scene.add(roadMesh);
+      }
+    }
+
+    // ── OUTSIDE-THE-FENCE ROADS — flat "real map" lines ──────────────────────
+    // Beyond the fence we don't build the 3D city; the real street network is drawn
+    // as flat, clean strips on the ground (like a paper map) so a roaming guest sees
+    // the whole map's roads. No kerbs, lane paint, props or buildings out here. One
+    // merged geometry + a flat unlit material → a single extra draw call.
+    if (outsideRoadList.length) {
+      const mapGeoms = [];
+      for (const r of outsideRoadList) {
+        const pts = r.pts; if (!pts || pts.length < 2) continue;
+        const hw = (r.w && r.w > 0 ? r.w : 4) / 2;
+        const pos = [], idx = []; let base = 0;
+        // Miter-join offsets so the flat map roads don't break apart at corners.
+        const { left, right } = ribbonEdges(pts, hw);
+        for (let i = 0; i < pts.length - 1; i++) {
+          const al = left[i], ar = right[i], bl = left[i + 1], br = right[i + 1];
+          pos.push(al[0], 0, al[1],  ar[0], 0, ar[1],
+                   bl[0], 0, bl[1],  br[0], 0, br[1]);
+          idx.push(base, base + 2, base + 1,  base + 1, base + 2, base + 3);
+          base += 4;
+        }
+        if (!pos.length) continue;
+        const g = new THREE.BufferGeometry();
+        g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+        g.setIndex(idx);
+        mapGeoms.push(g);
+      }
+      if (mapGeoms.length) {
+        const merged = mergeGeometries(mapGeoms, false);
+        for (const g of mapGeoms) g.dispose();
+        if (merged) {
+          merged.computeVertexNormals();
+          ownedGeoms.push(merged);
+          // Flat, unlit map-road colour; polygonOffset so it draws cleanly over the
+          // greens/ground without z-fighting. Fog-aware so it fades into the haze.
+          const mapRoadMat = new THREE.MeshBasicMaterial({ color: hsl(40, 0.08, 0.74), fog: true });
+          mapRoadMat.polygonOffset = true; mapRoadMat.polygonOffsetFactor = -3; mapRoadMat.polygonOffsetUnits = -3;
+          localMats.push(mapRoadMat);
+          const mesh = new THREE.Mesh(merged, mapRoadMat);
+          mesh.position.y = 0.1; mesh.receiveShadow = false;
+          mesh.matrixAutoUpdate = false; mesh.updateMatrix();
+          scene.add(mesh);
+        }
       }
     }
 
@@ -1315,12 +1378,37 @@ export function createVeyraWorld(container, opts) {
         P.push(ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz);
         I.push(base, base + 1, base + 2, base, base + 2, base + 3);
       };
+      // Is (x,z) on the carriageway of a road OTHER than `self`? Sidewalk/kerb that
+      // lands here is crossing an intersecting street, so it's dropped — this clears
+      // the overlapping cobblestone + kerb lines smeared across junctions.
+      const onOtherCarriageway = (x, z, self) => {
+        for (const r2 of roadList) {
+          if (r2 === self) continue;
+          const pts2 = r2.pts; if (!pts2 || pts2.length < 2) continue;
+          const hw2 = (r2.w && r2.w > 0 ? r2.w : 4) / 2; const lim2 = (hw2 - 0.3) * (hw2 - 0.3);
+          if (lim2 <= 0) continue;
+          for (let j = 0; j < pts2.length - 1; j++) {
+            const p = pts2[j], np = pts2[j + 1];
+            const ex = np[0] - p[0], ez = np[1] - p[1]; const L2 = ex * ex + ez * ez || 1;
+            let tt = ((x - p[0]) * ex + (z - p[1]) * ez) / L2; tt = tt < 0 ? 0 : tt > 1 ? 1 : tt;
+            const ddx = x - (p[0] + ex * tt), ddz = z - (p[1] + ez * tt);
+            if (ddx * ddx + ddz * ddz < lim2) return true;
+          }
+        }
+        return false;
+      };
 
       for (const r of roadList) {
         const pts = r.pts; if (!pts || pts.length < 2) continue;
         const hw = (r.w && r.w > 0 ? r.w : 4) / 2;
         const wide = hw >= 3;        // centre dashes only on real carriageways, not alleys
         let arc = 0;                 // running arc-length for the dash pattern
+
+        // Miter-join edges so the kerb tracks the asphalt edge exactly through
+        // bends (and the pavement closes up on the outside of curves too). Inner
+        // edge sits on the road edge (hw); outer edge is the sidewalk back (hw+SW).
+        const innerE = ribbonEdges(pts, hw);
+        const outerE = ribbonEdges(pts, hw + SW);
 
         for (let i = 0; i < pts.length - 1; i++) {
           const a = pts[i], b = pts[i + 1];
@@ -1329,14 +1417,22 @@ export function createVeyraWorld(container, opts) {
           const tx = dx / len, tz = dz / len;   // unit tangent
           const nx = -tz, nz = tx;              // left normal
 
-          // Kerb + pavement on BOTH sides of the segment.
+          // Kerb + pavement on BOTH sides of the segment. s=+1 → left edges,
+          // s=-1 → right edges (ribbonEdges mirrors them through the centreline).
           for (const s of [1, -1]) {
-            const ix0 = a[0] + nx * hw * s, iz0 = a[1] + nz * hw * s;                 // road edge, A
-            const ix1 = b[0] + nx * hw * s, iz1 = b[1] + nz * hw * s;                 // road edge, B
-            const ox0 = a[0] + nx * (hw + SW) * s, oz0 = a[1] + nz * (hw + SW) * s;   // sidewalk outer, A
-            const ox1 = b[0] + nx * (hw + SW) * s, oz1 = b[1] + nz * (hw + SW) * s;   // sidewalk outer, B
+            const inA = s > 0 ? innerE.left[i] : innerE.right[i];
+            const inB = s > 0 ? innerE.left[i + 1] : innerE.right[i + 1];
+            const outA = s > 0 ? outerE.left[i] : outerE.right[i];
+            const outB = s > 0 ? outerE.left[i + 1] : outerE.right[i + 1];
+            const ix0 = inA[0], iz0 = inA[1];     // road edge, A
+            const ix1 = inB[0], iz1 = inB[1];     // road edge, B
+            const ox0 = outA[0], oz0 = outA[1];   // sidewalk outer, A
+            const ox1 = outB[0], oz1 = outB[1];   // sidewalk outer, B
             const mx = (ix0 + ix1 + ox0 + ox1) * 0.25, mz = (iz0 + iz1 + oz0 + oz1) * 0.25;
             if (inBldg(mx, mz)) continue;       // pavement would sit inside a building → skip
+            // Skip the inner (kerb) point too: drop pavement that crosses another street.
+            const kmx = (ix0 + ix1) * 0.5, kmz = (iz0 + iz1) * 0.5;
+            if (onOtherCarriageway(mx, mz, r) || onOtherCarriageway(kmx, kmz, r)) continue;
             // Vertical kerb face (asphalt → kerb top) along the road edge.
             quad(kPos, kIdx, ix0, ROAD_Y, iz0, ix1, ROAD_Y, iz1, ix1, KERB_Y, iz1, ix0, KERB_Y, iz0);
             // Flat sidewalk slab behind the kerb (planar XZ UVs → ~2 m stone tiles).
@@ -1450,6 +1546,8 @@ export function createVeyraWorld(container, opts) {
     // alpha-card trees are a single InstancedMesh pair, so the whole ~832-tree set is
     // cheap; only the LOW tier trims to the nearest-to-lake for the GPU budget.
     let treeList = (data && data.trees) ? data.trees : [];
+    // Trees are part of the 3D city only — outside the fence stays a flat map.
+    treeList = treeList.filter((t) => (t[0] * t[0] + t[1] * t[1]) <= fenceR * fenceR);
     const treeCap = q.tier === 'low' ? 450 : Infinity;   // hi/mid: every real tree
     if (treeList.length > treeCap) {
       treeList = treeList
@@ -1583,6 +1681,20 @@ export function createVeyraWorld(container, opts) {
       new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.26 }));
     blob.rotation.x = -Math.PI / 2; blob.position.y = 0.05; scene.add(blob);
     setNameTag(opts.playerName || '');   // float the username above the player (if signed in)
+
+    // ── Dev teleport map snapshot ──────────────────────────────────────────
+    // Capture the PROCESSED geometry (what's actually rendered) as plain {x,z}
+    // arrays — no THREE refs — so the React overlay can draw a top-down map and
+    // turn a click back into world coordinates. Built once here, when the lake,
+    // roads, buildings, spawn and play radius are all known. `getMapSnapshot()`
+    // adds a live copy of the interactables on read.
+    worldMap = {
+      bounds: { r: outerRoam || fenceR, fence: fenceR },
+      water: (lakePoly && lakePoly.length >= 3) ? lakePoly : null,
+      roads: roadList.concat(outsideRoadList),     // [{ pts:[[x,z],...], w }]
+      buildings: buildList,                        // [{ poly:[[x,z],...], h }]
+      spawn: { x: SPAWN.x, z: SPAWN.z },
+    };
 
     // ── Animated hero NPCs (Kenney Mini-Characters, CC0): a handful of real,
     //    idle-animated people along the lakeside promenade + near spawn. The dense
@@ -1738,6 +1850,47 @@ export function createVeyraWorld(container, opts) {
     }
   }
 
+  // ── Free ground poses (sit / lie), shared by local + remote ──────────────
+  // POSE only (arm-X + leg rotations). The body DROP for sit comes from the
+  // loop's targetY; the lie tilt comes from rotating the avatar group. We avoid
+  // arm-Z here because the face layer eases arm-Z back toward 0 every frame.
+  function applyGroundSitPose(parts) {
+    parts.legL.rotation.x = -1.5; parts.legR.rotation.x = -1.5;
+    parts.legL.rotation.z = 0.16; parts.legR.rotation.z = -0.16;   // knees splayed
+    parts.armL.rotation.x = -0.4; parts.armR.rotation.x = -0.4;
+  }
+  function applyLiePose(parts) {
+    parts.legL.rotation.x = 0; parts.legR.rotation.x = 0;
+    parts.legL.rotation.z = 0; parts.legR.rotation.z = 0;
+    parts.armL.rotation.x = -0.22; parts.armR.rotation.x = -0.22;
+  }
+  // Reset the pose-only leg roll the walk pose doesn't touch. The group tilt (lie)
+  // is eased back to 0 by the loop, so we deliberately don't snap it here.
+  function clearPoseParts(parts) {
+    parts.legL.rotation.z = 0; parts.legR.rotation.z = 0;
+  }
+  // Toggle a held ground pose for the LOCAL player (movement also clears it). Leaves
+  // a bench first; broadcasts via the regular `anim` field (no extra packet).
+  function togglePose(p) {
+    if (!player) return;
+    if (sitting) requestStand();         // can't bench-sit and ground-pose at once
+    if (pose === p) { pose = null; clearPoseParts(player.parts); }
+    else { pose = p; }
+  }
+
+  // Emotes broadcast like chat: play locally at once for snappy feedback AND tell
+  // the server, which rides the emote out in the next snapshot to everyone else.
+  const EMOTE_FRESH_MS = 4000;          // ignore stale emotes a late joiner sees
+  function doEmote(name) {
+    if (!player) return;
+    // Sit / lie are HELD poses (synced via `anim`), not one-shot gestures.
+    if (name === 'sit') return togglePose('gsit');
+    if (name === 'lie') return togglePose('lie');
+    if (sitting || pose) return;        // don't gesture mid-pose
+    player.playEmote(name);
+    if (opts.onEmote) opts.onEmote(name);
+  }
+
   // ── Remote players ───────────────────────────────────────────────────────
   function makeRemote(state) {
     const av = createAvatar({ url: state.avatarUrl || '', hue: state.hue, style: state.style, age: state.age });
@@ -1750,7 +1903,7 @@ export function createVeyraWorld(container, opts) {
       av, group: av.group, parts: av.parts, tag,
       tx: state.x, tz: state.z, tRotY: state.rotY || 0,
       anim: state.anim || 'idle', seatId: state.seatId || null,
-      phase: Math.random() * 6.28, last: performance.now(),
+      phase: Math.random() * 6.28, last: performance.now(), lastEmoteAt: 0,
     };
     remotePlayers.set(state.id, r);
     return r;
@@ -1783,6 +1936,11 @@ export function createVeyraWorld(container, opts) {
         r.lastMsgAt = s.msgAt;
         say(s.id, s.msg);
       }
+      // Emotes ride out the same way — replay a fresh one on the remote avatar.
+      if (s.emote && s.emoteAt && s.emoteAt !== r.lastEmoteAt && Date.now() - s.emoteAt < EMOTE_FRESH_MS) {
+        r.lastEmoteAt = s.emoteAt;
+        r.av && r.av.playEmote && r.av.playEmote(s.emote);
+      }
     }
   }
   function playerLeft(id) { disposeRemote(id); }
@@ -1794,25 +1952,35 @@ export function createVeyraWorld(container, opts) {
       let gx = r.tx, gz = r.tz, gy = 0, gRotY = r.tRotY;
       const seated = !!r.seatId && seatById.has(r.seatId);
       if (seated) { const st = seatById.get(r.seatId); gx = st.x; gz = st.z; gy = SEAT_Y; gRotY = st.rotY; }
+      else if (r.anim === 'gsit') gy = GSIT_Y;          // ground-sit drops the body
       const g = r.group;
       g.position.x += (gx - g.position.x) * Math.min(1, dt * 10);
       g.position.z += (gz - g.position.z) * Math.min(1, dt * 10);
       g.position.y += (gy - g.position.y) * Math.min(1, dt * 10);
       let dy = ((gRotY - g.rotation.y + Math.PI) % (Math.PI * 2)) - Math.PI;
       g.rotation.y += dy * Math.min(1, dt * 10);
+      // Lie tilts the avatar onto its back; every other state eases back upright.
+      const tiltTo = (r.anim === 'lie' && r.av.kind !== 'glb') ? -Math.PI / 2 : 0;
+      g.rotation.x += (tiltTo - g.rotation.x) * Math.min(1, dt * 8);
       const rp = r.av.parts;   // live getter — GLB→procedural fallback swaps parts under us
       if (seated) { applySitPose(rp, g, true); }
+      else if (r.anim === 'gsit') { applyGroundSitPose(rp); }
+      else if (r.anim === 'lie') { applyLiePose(rp); }
       else {
         applySitPose(rp, g, false);
+        rp.legL.rotation.z = 0; rp.legR.rotation.z = 0;   // clear leftover pose leg-roll
         const mv = r.anim === 'walk';
         r.phase += dt * (mv ? 10 : 0);
         const sw = mv ? 0.6 : 0;
         const ez = (p, v) => p.rotation.x += (v - p.rotation.x) * Math.min(1, dt * 12);
         ez(rp.legL, Math.sin(r.phase) * sw); ez(rp.legR, -Math.sin(r.phase) * sw);
-        ez(rp.armL, -Math.sin(r.phase) * sw * 0.7); ez(rp.armR, Math.sin(r.phase) * sw * 0.7);
+        // While an emote plays the remote avatar drives its OWN arms — don't fight it.
+        if (!(r.av.isEmoting && r.av.isEmoting())) {
+          ez(rp.armL, -Math.sin(r.phase) * sw * 0.7); ez(rp.armR, Math.sin(r.phase) * sw * 0.7);
+        }
       }
       // Face life (blink / idle look) for remote avatars too.
-      r.av.update && r.av.update(dt, { moving: !seated && r.anim === 'walk', sitting: seated });
+      r.av.update && r.av.update(dt, { moving: !seated && r.anim === 'walk', sitting: seated || r.anim === 'gsit' });
       if (r.tag) r.tag.quaternion.copy(camera.quaternion);
     }
   }
@@ -2000,6 +2168,7 @@ export function createVeyraWorld(container, opts) {
   }
   function requestSit() {
     if (sitting || !player) return;
+    if (pose) { pose = null; clearPoseParts(player.parts); }   // leave a ground pose first
     const seatId = findNearestFreeSeat(player.group.position.x, player.group.position.z);
     if (!seatId) return;
     pendingSeatId = seatId;
@@ -2096,7 +2265,7 @@ export function createVeyraWorld(container, opts) {
     const lanternMat = new THREE.MeshStandardMaterial({ color: hsl(42, 0.7, 0.5), emissive: hsl(42, 0.9, 0.45), emissiveIntensity: 0.9, roughness: 0.5 });
     localMats.push(capPatrol, capChecker, lanternMat);
     const faceOut = (a) => Math.atan2(Math.cos(a), Math.sin(a));   // look radially outward
-    const placeGuard = (x, z, ry, checker) => {
+    const placeGuard = (x, z, ry, checker, solid = true, idle = true) => {
       const c = buildAvatar({ hue: checker ? 168 : 212, style: 'minimal' });
       c.group.position.set(x, 0, z);
       c.group.rotation.y = ry != null ? ry : 0;
@@ -2109,8 +2278,13 @@ export function createVeyraWorld(container, opts) {
       const tag = makeTag(checker ? LABELS.checker : LABELS.security, checker ? 'rgba(21,214,180,0.95)' : 'rgba(90,150,230,0.92)');
       tag.position.set(0, 2.15, 0); c.group.add(tag);
       scene.add(c.group);
-      circles.push({ x, z, r: 0.45 });   // solid — no walking through a guard
-      liveGuards.push({ g: c, ph: liveGuards.length * 0.7 });   // idle-animate in the loop
+      // Solid guards get a collision circle. The gate OPENER walks to/from the gate,
+      // so it's left non-solid (a moving guard's static circle would block the path).
+      if (solid) circles.push({ x, z, r: 0.45 });   // solid — no walking through a guard
+      // Gate checker/opener are scripted in the gate loop, so they opt OUT of the
+      // generic idle animation (which would fight their pose every frame).
+      if (idle) liveGuards.push({ g: c, ph: liveGuards.length * 0.7 });   // idle-animate in the loop
+      return c;
     };
 
     // ── the four cardinal gates: pillars + lintel + label banner + NPCs ──
@@ -2170,22 +2344,44 @@ export function createVeyraWorld(container, opts) {
           const d = inwardYaw - closedYaw;
           rec.leaves.push({ grp: hinge, closedYaw, delta: Math.atan2(Math.sin(d), Math.cos(d)) });
         }
-        if (gated) {
+        // Gate-leaf collision for EVERYONE (guests AND signed-in members), so the
+        // closed leaves are solid — no walking through them. Each barrier circle
+        // references its gate record; the movement loop skips it once `openT` rises
+        // (the leaves have actually swung open), keeping collision in lock-step with
+        // the visuals in both directions.
+        {
           const barLen = halfGapM * 2;
           const steps = Math.max(4, Math.round(barLen / 2));
           for (let s2 = 0; s2 <= steps; s2++) {
             const tt2 = s2 / steps - 0.5;
-            circles.push({ x: cxg + tx * tt2 * barLen, z: czg + tz * tt2 * barLen, r: 1.5, gate: g.key });
+            circles.push({ x: cxg + tx * tt2 * barLen, z: czg + tz * tt2 * barLen, r: 1.5, gateRec: rec });
           }
         }
       }
-      // Two security guards flank each gate (just OUTSIDE, facing approaching
-      // visitors) — they man the checkpoint. Plus a civilian or two queuing.
+      // Two guards man each gate, both scripted in the gate loop (non-solid, no
+      // generic idle):
+      //  • CHECKER (teal "Soát vé") — runs OUT to meet an arriving visitor and verify
+      //    them; raises a hand to SIGNAL the opener when they're cleared.
+      //  • OPENER (navy "Bảo an") — on that signal, runs to the leaf and swings it.
+      // The gate is CLOSED by default and only opens after this sequence.
       const out = faceOut(g.a);
-      for (const sgn of [-1, 1]) {
-        placeGuard(cxg + Math.cos(g.a) * 4 + tx * sgn * (halfGapM - 2),
-                   czg + Math.sin(g.a) * 4 + tz * sgn * (halfGapM - 2), out, true);
-      }
+      const gx0 = cxg + Math.cos(g.a) * 4, gz0 = czg + Math.sin(g.a) * 4;
+      const ckHomeX = gx0 + tx * 1 * (halfGapM - 2), ckHomeZ = gz0 + tz * 1 * (halfGapM - 2);
+      const opHomeX = gx0 + tx * -1 * (halfGapM - 2), opHomeZ = gz0 + tz * -1 * (halfGapM - 2);
+      const checker = placeGuard(ckHomeX, ckHomeZ, out, true, false, false);
+      const opener = placeGuard(opHomeX, opHomeZ, out, false, false, false);
+      rec.checker = checker;
+      rec.checkerHome = { x: ckHomeX, z: ckHomeZ, ry: out };
+      // Checker meets the visitor just OUTSIDE the gate mouth, facing out.
+      rec.checkerPost = { x: cxg + Math.cos(g.a) * 4.5, z: czg + Math.sin(g.a) * 4.5, ry: faceOut(g.a) };
+      rec.guard = opener;
+      rec.guardHome = { x: opHomeX, z: opHomeZ, ry: out };
+      // Where the opener stands to push the leaf: beside the −1 pillar, a step outward.
+      rec.guardOpen = { x: cxg + tx * -1 * (halfGapM - 1.0) + Math.cos(g.a) * 1.4,
+                        z: czg + tz * -1 * (halfGapM - 1.0) + Math.sin(g.a) * 1.4 };
+      rec.checkP = 0;        // checker run-out progress (0 post → 1 at the gate mouth)
+      rec.guardP = 0;        // opener run progress (0 post → 1 at the leaf)
+      rec.wantOpen = false;  // guest validity latch (set by openGate after a valid ticket)
       // (No civilian NPCs at the gate — the "guest" is the unauthenticated player.)
     }
 
@@ -2203,17 +2399,33 @@ export function createVeyraWorld(container, opts) {
       }
       const N = slots.length;
       if (!N) return;
-      const bodyGeo = new THREE.CylinderGeometry(0.18, 0.27, 1.5, 8).translate(0, 0.75, 0);
-      const headGeo = new THREE.SphereGeometry(0.21, 10, 10).translate(0, 1.62, 0);
-      const capG = new THREE.CylinderGeometry(0.24, 0.28, 0.18, 10).translate(0, 1.84, 0);
-      ownedGeoms.push(bodyGeo, headGeo, capG);
-      const bodyMat = new THREE.MeshStandardMaterial({ color: hsl(212, 0.2, 0.33), roughness: 0.7, metalness: 0.1 });
-      const headMat = new THREE.MeshStandardMaterial({ color: hsl(28, 0.32, 0.6), roughness: 0.85 });
-      const capM = new THREE.MeshStandardMaterial({ color: hsl(212, 0.25, 0.18), roughness: 0.8 });
-      localMats.push(bodyMat, headMat, capM);
-      const body = new THREE.InstancedMesh(bodyGeo, bodyMat, N);
-      const head = new THREE.InstancedMesh(headGeo, headMat, N);
-      const capI = new THREE.InstancedMesh(capG, capM, N);
+      // A proper humanoid guard (torso + 2 legs + 2 arms + head + cap) MERGED into one
+      // vertex-coloured geometry, rendered as a SINGLE InstancedMesh — the whole patrol
+      // reads as people (not pillars) at one draw call. The loop moves each instance as
+      // a rigid body (sway + bob), matching the old behaviour.
+      const navy = hsl(212, 0.22, 0.34), pants = hsl(212, 0.12, 0.22), gskin = hsl(28, 0.32, 0.6), capCol = hsl(212, 0.25, 0.16);
+      const paint = (geo, col) => {
+        const c = new THREE.Color(col), n = geo.attributes.position.count, arr = new Float32Array(n * 3);
+        for (let k = 0; k < n; k++) { arr[k * 3] = c.r; arr[k * 3 + 1] = c.g; arr[k * 3 + 2] = c.b; }
+        geo.setAttribute('color', new THREE.Float32BufferAttribute(arr, 3));
+        return geo;
+      };
+      const guardParts = [
+        paint(new THREE.CylinderGeometry(0.17, 0.21, 0.62, 8).translate(0, 1.05, 0), navy),     // torso
+        paint(new THREE.CylinderGeometry(0.09, 0.1, 0.78, 6).translate(-0.1, 0.39, 0), pants),  // leg L
+        paint(new THREE.CylinderGeometry(0.09, 0.1, 0.78, 6).translate(0.1, 0.39, 0), pants),   // leg R
+        paint(new THREE.CylinderGeometry(0.06, 0.06, 0.52, 6).translate(-0.27, 1.0, 0), navy),  // arm L
+        paint(new THREE.CylinderGeometry(0.06, 0.06, 0.52, 6).translate(0.27, 1.0, 0), navy),   // arm R
+        paint(new THREE.SphereGeometry(0.17, 10, 10).translate(0, 1.55, 0), gskin),             // head
+        paint(new THREE.CylinderGeometry(0.2, 0.23, 0.16, 10).translate(0, 1.72, 0), capCol),   // cap
+      ];
+      const guardGeo = mergeGeometries(guardParts, false);
+      for (const g of guardParts) g.dispose();
+      ownedGeoms.push(guardGeo);
+      const guardMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.75, metalness: 0.08 });
+      localMats.push(guardMat);
+      const body = new THREE.InstancedMesh(guardGeo, guardMat, N);
+      const head = body, capI = body;   // single mesh; aliases keep the rigid-body loop below working
       const m = new THREE.Matrix4(), qq = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0),
             pos = new THREE.Vector3(), scl = new THREE.Vector3(1, 1, 1);
       const labelEvery = Math.max(1, Math.round(N / (q.tier === 'low' ? 12 : q.tier === 'mid' ? 26 : 46)));
@@ -2230,7 +2442,7 @@ export function createVeyraWorld(container, opts) {
           tag.position.set(pos.x, 2.05, pos.z); scene.add(tag);
         }
       }
-      for (const im of [body, head, capI]) {
+      for (const im of [body]) {
         im.instanceMatrix.needsUpdate = true;
         im.matrixAutoUpdate = false; im.updateMatrix();
         im.frustumCulled = false;   // instances ring the whole map — don't cull the set as one
@@ -3535,9 +3747,9 @@ export function createVeyraWorld(container, opts) {
         applyFog(w.o);
       }
     } else if (e.key === '1') {
-      if (player && !sitting) player.playEmote('wave');
+      doEmote('wave');
     } else if (e.key === '2') {
-      if (player && !sitting) player.playEmote('celebrate');
+      doEmote('celebrate');
     }
   };
   window.addEventListener('keydown', onPerfKey);
@@ -3739,13 +3951,18 @@ export function createVeyraWorld(container, opts) {
       if (mag > 0.08) requestStand();
       else moving = false;
     }
+    // Free ground pose (sit/lie): any movement input stands up; else hold the pose.
+    if (pose) {
+      if (mag > 0.08) { pose = null; clearPoseParts(player.parts); }
+      else moving = false;
+    }
     // After a ticket is accepted the guard opens the gate and the player walks IN
     // automatically — steer toward a point just inside the gate, overriding input
     // until they're past the fence.
     let mvx = 0, mvz = 0;
     if (autoEnter && !entered) {
       autoEnter.t = (autoEnter.t || 0) + dt;
-      if (autoEnter.t > 5) { entered = true; autoEnter = null; }   // safety: never auto-walk forever
+      if (autoEnter.t > 8) { entered = true; autoEnter = null; }   // safety: never auto-walk forever (guard-run + slow swing can take ~3 s)
       else {
         const tgX = Math.cos(autoEnter.a) * (fenceR - 14), tgZ = Math.sin(autoEnter.a) * (fenceR - 14);
         const dx = tgX - pp.x, dz = tgZ - pp.z, dl = Math.hypot(dx, dz) || 1;
@@ -3763,12 +3980,17 @@ export function createVeyraWorld(container, opts) {
 
       const pr = Math.hypot(pp.x, pp.z);
       if (entered) {
-        if (pr > MAXR) { const s = MAXR / pr; pp.x *= s; pp.z *= s; }
+        // Members may also roam the flat map OUTSIDE — they're contained only by the
+        // fence ring + gate barriers (which open when the guard lets them through),
+        // not by an invisible wall at the city edge.
+        const lim = outerRoam || MAXR;
+        if (pr > lim) { const s = lim / pr; pp.x *= s; pp.z *= s; }
       } else {
-        // Guest: kept in the clean apron just OUTSIDE the fence. The fence + the
-        // closed gate barriers (collision circles below) stop them crossing in
-        // anywhere except a gate whose ticket has been accepted.
-        const OUTER = fenceR + 30;
+        // Guest: free to roam the WHOLE flat real map outside the fence (out to the
+        // far edge of the street network). The fence + the closed gate barriers
+        // (collision circles below) still stop them crossing IN anywhere except a
+        // gate whose ticket has been accepted.
+        const OUTER = outerRoam || (fenceR + 30);
         if (pr > OUTER) { const s = OUTER / pr; pp.x *= s; pp.z *= s; }
         // Walked inward through an opened gate → now inside the city for good.
         if (pr < fenceR - 6) { entered = true; autoEnter = null; }
@@ -3781,7 +4003,7 @@ export function createVeyraWorld(container, opts) {
           const arr = grid.get(gx + '_' + gz); if (!arr) continue;
           for (let n = 0; n < arr.length; n++) {
             const b = circles[arr[n]];
-            if (b.gate && openGates[b.gate]) continue;   // this gate's ticket cleared — let them pass
+            if (b.gateRec) { if (b.gateRec.openT > 0.55) continue; }   // gate leaves swung open → walk through (else solid)
             if (b.lm && b.lm.openT > 0.5) continue;       // landmark door open (in opening hours) — walk in
             const dx = pp.x - b.x, dz = pp.z - b.z; const dd = Math.hypot(dx, dz) || 1;
             if (dd < b.r + rad) { pp.x = b.x + dx / dd * (b.r + rad); pp.z = b.z + dz / dd * (b.r + rad); }
@@ -3839,10 +4061,11 @@ export function createVeyraWorld(container, opts) {
     }
     if (islandInfo) { const di = islandInfo; if (Math.hypot(pp.x - di.x, pp.z - di.z) <= di.r - 0.4) targetY = Math.max(targetY, di.deckY); }
     if (sitting) targetY = SEAT_Y;   // locked to the bench seat height
+    if (pose === 'gsit') targetY = GSIT_Y;   // ground-sit drops the whole body
     // Jump (space) + gravity. Grounded → smooth-follow terrain (bridge/island);
     // airborne → integrate vertical velocity.
     const baseY = targetY;
-    if (!sitting && keys[' '] && vy === 0 && pp.y <= baseY + 0.06) vy = 6.4;
+    if (!sitting && !pose && keys[' '] && vy === 0 && pp.y <= baseY + 0.06) vy = 6.4;
     if (vy !== 0 || pp.y > baseY + 0.02) {
       vy -= 18 * dt; pp.y += vy * dt;
       if (pp.y <= baseY) { pp.y = baseY; vy = 0; }
@@ -3853,10 +4076,19 @@ export function createVeyraWorld(container, opts) {
     const emoting = player.isEmoting && player.isEmoting();
     // GLB avatars pose themselves from update(state); only the procedural avatar is
     // posed via its `parts` bones here.
+    // Lie tilts the whole avatar onto its back (pivoting at the feet); every other
+    // state keeps it upright. Set every frame so it eases to/holds the right tilt.
+    player.group.rotation.x = (pose === 'lie' && player.kind !== 'glb')
+      ? player.group.rotation.x + (-Math.PI / 2 - player.group.rotation.x) * Math.min(1, dt * 8)
+      : player.group.rotation.x + (0 - player.group.rotation.x) * Math.min(1, dt * 8);
     if (player.kind === 'glb') {
       /* skeletal pose handled in player.update() below */
     } else if (sitting) {
       applySitPose(player.parts, player.group, true);
+    } else if (pose === 'gsit') {
+      applyGroundSitPose(player.parts);
+    } else if (pose === 'lie') {
+      applyLiePose(player.parts);
     } else {
       // Walk cadence + swing scale by age (young = quicker/bigger, old = slower).
       const g8 = player.gait || { stepRate: 1, swingAmt: 1 };
@@ -3872,12 +4104,12 @@ export function createVeyraWorld(container, opts) {
     }
     // Face layer (blink / idle look / expression / emote), AFTER the base pose so
     // it composites on top. Wide-eyed surprise mid-jump; neutral when grounded.
-    if (!sitting && !emoting) {
+    if (!sitting && !pose && !emoting) {
       if (heldExpr && now < heldExprUntil) player.setExpression(heldExpr);
       else { heldExpr = null; player.setExpression(pp.y <= baseY + 0.05 ? 'neutral' : 'surprised'); }
     }
-    player.update(dt, { moving, grounded: pp.y <= baseY + 0.05, sitting });
-    blob.position.set(pp.x, pp.y + 0.05, pp.z);
+    player.update(dt, { moving, grounded: pp.y <= baseY + 0.05, sitting: sitting || pose === 'gsit' });
+    blob.position.set(pp.x, Math.max(0.04, pp.y + 0.05), pp.z);   // keep the floor shadow grounded
 
     // Frame-rate-independent damping helper.
     const damp = (cur, target, lambda) => cur + (target - cur) * (1 - Math.exp(-lambda * dt));
@@ -3953,7 +4185,10 @@ export function createVeyraWorld(container, opts) {
     const offY = camDcur * Math.sin(posElev);
     camTarget.set(pp.x + offX, pivotY + offY, pp.z + offZ);
     if (camTarget.y < 0.5) camTarget.y = 0.5;     // ground/lake clamp
-    camera.position.lerp(camTarget, Math.min(1, dt * 9));
+    // A teleport asks for an instant cut so the camera doesn't pan across the
+    // whole map; otherwise ease toward the target as usual.
+    if (snapCam) { camera.position.copy(camTarget); snapCam = false; }
+    else camera.position.lerp(camTarget, Math.min(1, dt * 9));
     if (camera.position.y < 0.5) camera.position.y = 0.5;
     // Default: look at the head. Dragging DOWN past the camera floor tilts the VIEW
     // up toward the sky — capped at ~72° so the lookAt never reaches true vertical
@@ -4027,14 +4262,47 @@ export function createVeyraWorld(container, opts) {
     // loop below, recomputing every guard + perimeter instance N× per frame and
     // setting the perimeter instanceMatrix.needsUpdate N× — N = interactables.length.)
 
-    // Gates swing open: signed-in players have them open on approach (the guards man
-    // the checkpoint) and close behind; guests' gates open on a valid ticket.
+    // Gate checkpoint choreography — the gate is CLOSED by default:
+    //   1. Someone arrives → the CHECKER ("Soát vé") runs OUT to meet + verify them.
+    //   2. If they're valid (a member always; a guest once their ticket has cleared),
+    //      the checker raises a hand to SIGNAL the opener.
+    //   3. The OPENER ("Bảo an") runs to the leaf and swings the gate open — slowly.
+    // When the visitor leaves, the leaves shut and both guards walk back to their post.
+    // Collision tracks `openT`, so the leaves stay solid until they've actually opened.
+    const lerpGuard = (avatar, home, dest, prog, bobPhase) => {
+      if (!avatar || !home || !dest) return;
+      const e = prog < 0.5 ? 2 * prog * prog : 1 - Math.pow(-2 * prog + 2, 2) / 2;   // easeInOut
+      const grp = avatar.group;
+      grp.position.x = home.x + (dest.x - home.x) * e;
+      grp.position.z = home.z + (dest.z - home.z) * e;
+      const moving = prog > 0.02 && prog < 0.98;
+      grp.position.y = moving ? Math.abs(Math.sin(t * 9 + bobPhase)) * 0.06 : 0;   // jog bob
+      if (moving) grp.rotation.y = Math.atan2(dest.x - home.x, dest.z - home.z);
+      else grp.rotation.y = prog > 0.5 ? (dest.ry != null ? dest.ry : grp.rotation.y) : home.ry;
+    };
     for (const fg of fenceGates) {
       if (!fg.leaves) continue;
-      if (entered) { const gd = Math.hypot(pp.x - fg.x, pp.z - fg.z); fg.openTarget = gd < 14 ? 1 : 0; }
-      const tgt = fg.openTarget || 0;
-      if (Math.abs(fg.openT - tgt) > 0.001) {
-        fg.openT += (tgt - fg.openT) * Math.min(1, dt * 2.6);
+      const gd = Math.hypot(pp.x - fg.x, pp.z - fg.z);
+      const someoneHere = gd < 16;                          // a visitor at the gate (either side)
+      const valid = entered || !!fg.wantOpen;               // member always; guest once ticket cleared
+      // 1) Checker runs out whenever someone's at the gate.
+      const ckNew = (fg.checkP || 0) + (someoneHere ? 1 : -1) * dt * 1.3;
+      fg.checkP = ckNew < 0 ? 0 : ckNew > 1 ? 1 : ckNew;
+      // 2) Opener runs only once the checker has arrived AND the visitor is cleared.
+      const signal = someoneHere && fg.checkP > 0.9 && valid;
+      const opNew = (fg.guardP || 0) + (signal ? 1 : -1) * dt * 1.3;
+      fg.guardP = opNew < 0 ? 0 : opNew > 1 ? 1 : opNew;
+
+      lerpGuard(fg.checker, fg.checkerHome, fg.checkerPost, fg.checkP, fg.a);
+      lerpGuard(fg.guard, fg.guardHome, fg.guardOpen, fg.guardP, fg.a + 1.5);
+      // Checker raises a hand to signal the opener once the visitor is cleared.
+      if (fg.checker && fg.checker.parts && fg.checker.parts.armR) {
+        fg.checker.parts.armR.rotation.x = signal ? -2.1 : 0;
+      }
+      // 3) Leaves swing only once the opener is at the leaf, and slowly (~1.4 s).
+      const leafTgt = (signal && fg.guardP > 0.85) ? 1 : 0;
+      if (Math.abs(fg.openT - leafTgt) > 0.001) {
+        fg.openT += (leafTgt - fg.openT) * Math.min(1, dt * 1.5);
         for (const lf of fg.leaves) lf.grp.rotation.y = lf.closedYaw + lf.delta * fg.openT;
       }
     }
@@ -4082,9 +4350,9 @@ export function createVeyraWorld(container, opts) {
         P.qq.setFromAxisAngle(P.up, Math.atan2(Math.cos(a), Math.sin(a)) + Math.sin(t * 0.6 + pp2) * 0.25);
         P.pos.set(Math.cos(a) * P.ringR, Math.abs(Math.sin(t * 2.2 + pp2)) * 0.05, Math.sin(a) * P.ringR);
         P.m.compose(P.pos, P.qq, P.scl);
-        P.body.setMatrixAt(pi, P.m); P.head.setMatrixAt(pi, P.m); P.capI.setMatrixAt(pi, P.m);
+        P.body.setMatrixAt(pi, P.m);   // single merged-humanoid mesh
       }
-      P.body.instanceMatrix.needsUpdate = true; P.head.instanceMatrix.needsUpdate = true; P.capI.instanceMatrix.needsUpdate = true;
+      P.body.instanceMatrix.needsUpdate = true;
     }
 
     // Per-interactable: the floating marker bob + the proximity glow pulse.
@@ -4210,7 +4478,7 @@ export function createVeyraWorld(container, opts) {
     updateRemotes(dt, t);
     updateBubbles();
     {
-      const anim = sitting ? 'sit' : (moving ? 'walk' : 'idle');
+      const anim = sitting ? 'sit' : pose ? pose : (moving ? 'walk' : 'idle');
       opts.onLocalState && opts.onLocalState({
         x: pp.x, z: pp.z, rotY: player.group.rotation.y, anim, seatId: localSeatId,
       });
@@ -4307,7 +4575,7 @@ export function createVeyraWorld(container, opts) {
     sit() { requestSit(); },
     stand() { requestStand(); },
     // Emotes (driven by the HUD emote button + the 1/2 hotkeys).
-    emote(name) { if (player && !sitting) player.playEmote(name); },
+    emote(name) { doEmote(name); },
     setExpression(name) { if (player && player.setExpression) { player.setExpression(name); heldExpr = name; heldExprUntil = performance.now() + 4000; } },
     // Chat: show the local player's own bubble immediately (optimistic); remote
     // bubbles arrive via the presence snapshot.
@@ -4358,17 +4626,53 @@ export function createVeyraWorld(container, opts) {
       if (mini.parentNode) mini.parentNode.removeChild(mini);
       if (perfHud.parentNode) perfHud.parentNode.removeChild(perfHud);
     },
-    // Ticket accepted at gate `key`: drop its barrier so the guest can walk in.
+    // Ticket accepted at gate `key`: the guard runs out + swings the leaves open, then
+    // the guest auto-walks in (they wait at the barrier until the leaves actually open).
     openGate(key) {
       openGates[key] = true;
       let a = null;
-      for (const fg of fenceGates) if (fg.key === key) { fg.openTarget = 1; a = fg.a; }
+      for (const fg of fenceGates) if (fg.key === key) { fg.wantOpen = true; a = fg.a; }
       if (a != null) autoEnter = { a };   // guard opens the gate → auto-walk the player inside
     },
     recenter() {
       if (!player) return;
       player.group.position.copy(SPAWN);
       player.group.rotation.y = spawnYaw;
+    },
+    // ── Dev teleport map (gated to dev build / admin in the UI) ──────────────
+    // A read-only top-down snapshot of the rendered world + a live copy of the
+    // interactable places. Returns null until the world has finished building.
+    getMapSnapshot() {
+      if (!worldMap) return null;
+      return {
+        bounds: worldMap.bounds,
+        water: worldMap.water,
+        roads: worldMap.roads,
+        buildings: worldMap.buildings,
+        spawn: worldMap.spawn,
+        places: interactables.map((it) => ({
+          id: it.id, type: it.type, name: it.name, hue: it.hue,
+          x: it.pos.x, z: it.pos.z,
+        })),
+      };
+    },
+    // Live player position + facing, for the "you are here" marker on the map.
+    getPlayerPose() {
+      if (!player) return null;
+      return { x: player.group.position.x, z: player.group.position.z, yaw: player.group.rotation.y };
+    },
+    // Instantly move the player to a world (x,z): clamp into the play area, push
+    // out of any blocker, cut the camera, and persist the new position.
+    teleport(x, z) {
+      if (!player || !worldMap) return;
+      const r = resolveTeleport(x, z, worldMap.bounds.r, circles);
+      player.group.position.x = r.x;
+      player.group.position.z = r.z;
+      if (blob) { blob.position.x = r.x; blob.position.z = r.z; }
+      entered = true;          // teleporting into the city counts as cleared
+      snapCam = true;          // instant camera cut (no pan across the map)
+      posAccum = 0;
+      opts.onPos && opts.onPos({ x: r.x, z: r.z, entered });
     },
     setPlayerName(name) { setNameTag(name); },
     setLang(names) {

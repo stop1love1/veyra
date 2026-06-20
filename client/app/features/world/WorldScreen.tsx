@@ -3,6 +3,7 @@ import { VEYRA } from '../../data';
 import { Ic, Avatar, Glass, Btn, Loader } from '../../components/ui';
 import { HudTop, HudDock } from '../../components/hud';
 import { GateTicket } from '../gate/GateTicket';
+import { DevMap, type DevMapApi } from './DevMap';
 import { createVeyraWorld } from '../../lib/three/worldHanoi';
 import { createRealtime, type RealtimeClient, type LocalState } from '../../lib/net/realtime';
 import type { Game } from '../../lib/game/types';
@@ -61,6 +62,10 @@ function World3D({ g }: { g: Game }) {
     emote?: (name: string) => void;
     setExpression?: (name: string) => void;
     say?: (text: string) => void;
+    // Dev teleport map (gated to dev build / admin).
+    getMapSnapshot?: DevMapApi['getMapSnapshot'];
+    getPlayerPose?: DevMapApi['getPlayerPose'];
+    teleport?: DevMapApi['teleport'];
     net?: {
       snapshot: (states: unknown[]) => void;
       playerLeft: (id: string) => void;
@@ -76,8 +81,20 @@ function World3D({ g }: { g: Game }) {
   const [sitInfo, setSitInfo] = React.useState<{ seated: boolean; canSit: boolean } | null>(null);
   const [chatOpen, setChatOpen] = React.useState(false);
   const [emoteOpen, setEmoteOpen] = React.useState(false);
+  const [mapOpen, setMapOpen] = React.useState(false);
   const chatInputRef = React.useRef<HTMLInputElement | null>(null);
   const authed = !!g.auth.user;
+  // The teleport map is a dev tool: available in a dev build, or to admins in any
+  // build. Production visitors never see the FAB, hotkey, or overlay.
+  const canDevMap = process.env.NODE_ENV !== 'production' || !!g.auth.isAdmin;
+  // Stable façade over the engine ref for DevMap. The closures read worldApi.current
+  // at call time (never during render), so the map sees the live engine + null-safe
+  // values before the world has finished building.
+  const devMapApi = React.useMemo<DevMapApi>(() => ({
+    getMapSnapshot: () => worldApi.current?.getMapSnapshot?.() ?? null,
+    getPlayerPose: () => worldApi.current?.getPlayerPose?.() ?? null,
+    teleport: (x, z) => { worldApi.current?.teleport?.(x, z); },
+  }), []);
 
   // Send the chat field's text: optimistic local bubble + broadcast, then close.
   const sendChat = React.useCallback(() => {
@@ -99,6 +116,20 @@ function World3D({ g }: { g: Game }) {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [chatOpen]);
+
+  // Dev/admin: 'm' toggles the teleport map; Esc closes it. Ignored while typing
+  // or while the chat field is open (so 'm' types normally).
+  React.useEffect(() => {
+    if (!canDevMap) return;
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (document.activeElement as HTMLElement | null)?.tagName;
+      const typing = tag === 'INPUT' || tag === 'TEXTAREA';
+      if ((e.key === 'm' || e.key === 'M') && !typing && !chatOpen) { e.preventDefault(); setMapOpen((v) => !v); }
+      else if (e.key === 'Escape' && mapOpen) { e.preventDefault(); setMapOpen(false); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [canDevMap, chatOpen, mapOpen]);
 
   // Focus the field when it opens.
   React.useEffect(() => { if (chatOpen) chatInputRef.current?.focus(); }, [chatOpen]);
@@ -152,6 +183,8 @@ function World3D({ g }: { g: Game }) {
       // ── Multiplayer wiring ──
       selfId,
       onLocalState: (s: LocalState) => rtRef.current?.sendState(s),
+      // Broadcast emotes/actions so other players see them (rides the snapshot).
+      onEmote: (name: string) => rtRef.current?.sendEmote(name),
       onSit: (info: { seated: boolean; canSit: boolean }) => { if (!cancelled) setSitInfo(info); },
       claimSeat: (seatId: string) => rtRef.current?.claimSeat(seatId),
       releaseSeat: () => rtRef.current?.releaseSeat(),
@@ -198,7 +231,12 @@ function World3D({ g }: { g: Game }) {
     <div className="v-screen v-world3d">
       <div className="v-3d-canvas" ref={ref} />
       {!ready && <div className="v-3d-loading"><Loader label={g.t('loadingWorld')} /></div>}
-      <HudTop g={g} />
+      {/* Dev/admin teleport map: the trigger sits beside the avatar in HudTop. */}
+      <HudTop g={g} onMap={canDevMap ? () => setMapOpen(true) : undefined} />
+      {canDevMap && mapOpen && (
+        <DevMap api={devMapApi} lang={g.lang} onClose={() => setMapOpen(false)} />
+      )}
+
       {weather && (
         <div className="v-weather-chip" aria-label={`${weather.tempC}° ${g.lang === 'vi' ? weather.label : (weather.labelEn || weather.label)}`}>
           <Ic name={weather.icon} size={15} />
@@ -278,7 +316,7 @@ function World3D({ g }: { g: Game }) {
             ref={chatInputRef}
             className="v-chat-input"
             type="text"
-            maxLength={120}
+            maxLength={1000}
             enterKeyHint="send"
             placeholder={g.lang === 'en' ? 'Say something…' : 'Nhập tin nhắn…'}
             onKeyDown={(e) => {
@@ -304,14 +342,14 @@ function World3D({ g }: { g: Game }) {
             <div className="v-emote-panel">
               <span className="v-emote-panel-lbl">{g.lang === 'en' ? 'Actions' : 'Hành động'}</span>
               <div className="v-emote-grid">
-                {([['wave', '👋'], ['dance', '💃'], ['bow', '🙇'], ['clap', '👏'], ['point', '👉'], ['arms-crossed', '🙅'], ['think', '🤔']] as const).map(([name, emoji]) => (
+                {([['wave', '👋'], ['dance', '💃'], ['bow', '🙇'], ['clap', '👏'], ['point', '👉'], ['arms-crossed', '🙅'], ['think', '🤔'], ['laugh', '😄'], ['cry', '😭'], ['sit', '🪑'], ['lie', '🛌']] as const).map(([name, emoji]) => (
                   <button key={name} className="v-emote-cell" title={name}
                           onClick={() => { worldApi.current?.emote?.(name); setEmoteOpen(false); }}>{emoji}</button>
                 ))}
               </div>
               <span className="v-emote-panel-lbl">{g.lang === 'en' ? 'Expressions' : 'Biểu cảm'}</span>
               <div className="v-emote-grid">
-                {([['neutral', '😐'], ['happy', '😊'], ['surprised', '😮'], ['sad', '😢'], ['angry', '😠']] as const).map(([name, emoji]) => (
+                {([['neutral', '😐'], ['happy', '😊'], ['surprised', '😮'], ['sad', '😢'], ['angry', '😠'], ['love', '😍'], ['sleepy', '😴']] as const).map(([name, emoji]) => (
                   <button key={name} className="v-emote-cell" title={name}
                           onClick={() => { worldApi.current?.setExpression?.(name); }}>{emoji}</button>
                 ))}

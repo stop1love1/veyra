@@ -1,12 +1,22 @@
 import { useState } from 'react';
-import { Avatar, Coin } from '../ui';
+import { Avatar, Coin, Ic } from '../ui';
 import { LangChip } from './LangChip';
 import { AccountModal } from '../auth/AccountModal';
 import type { Game } from '../../lib/game/types';
 
-export function HudTop({ g }: { g: Game }) {
+// Optional dev/admin teleport-map trigger, rendered to the right of the avatar.
+function MapBtn({ onMap, label }: { onMap: () => void; label: string }) {
+  return (
+    <button type="button" className="v-hud-mapbtn" onClick={onMap} aria-label={label} title={label}>
+      <Ic name="map" size={18} />
+    </button>
+  );
+}
+
+export function HudTop({ g, onMap }: { g: Game; onMap?: () => void }) {
   const [acct, setAcct] = useState(false);
   const u = g.auth.user;
+  const mapLabel = g.lang === 'en' ? 'Teleport map' : 'Bản đồ dịch chuyển';
 
   // Guests (not signed in) see NO account info: name / level / coins are local,
   // default values and would read as a fake account. Only the language toggle
@@ -15,7 +25,9 @@ export function HudTop({ g }: { g: Game }) {
   if (!u) {
     return (
       <div className="v-hudtop">
-        <span />
+        <div className="v-hudtop-left">
+          {onMap ? <MapBtn onMap={onMap} label={mapLabel} /> : <span />}
+        </div>
         <div className="v-hudtop-right">
           <LangChip g={g} dark inline />
         </div>
@@ -28,20 +40,23 @@ export function HudTop({ g }: { g: Game }) {
 
   return (
     <div className="v-hudtop">
-      {/* Tapping the profile opens a compact account dialog (not a full screen). */}
-      <button className="v-hud-profile" onClick={() => setAcct(true)}
-              aria-label={g.t('account')} aria-haspopup="dialog">
-        <Avatar hue={g.player.hue} size={38} />
-        <div className="v-hud-pinfo">
-          <span className="v-hud-pname">{name}</span>
-          <span className="v-mono v-hud-plvl">
-            {roleLabel ? roleLabel + ' · ' : ''}{g.t('level')} {g.level}
-          </span>
-          <span className="v-hud-xp" aria-hidden="true">
-            <span style={{ width: Math.round(g.levelProgress * 100) + '%' }} />
-          </span>
-        </div>
-      </button>
+      <div className="v-hudtop-left">
+        {/* Tapping the profile opens a compact account dialog (not a full screen). */}
+        <button className="v-hud-profile" onClick={() => setAcct(true)}
+                aria-label={g.t('account')} aria-haspopup="dialog">
+          <Avatar hue={g.player.hue} size={38} />
+          <div className="v-hud-pinfo">
+            <span className="v-hud-pname">{name}</span>
+            <span className="v-mono v-hud-plvl">
+              {roleLabel ? roleLabel + ' · ' : ''}{g.t('level')} {g.level}
+            </span>
+            <span className="v-hud-xp" aria-hidden="true">
+              <span style={{ width: Math.round(g.levelProgress * 100) + '%' }} />
+            </span>
+          </div>
+        </button>
+        {onMap && <MapBtn onMap={onMap} label={mapLabel} />}
+      </div>
       <div className="v-hudtop-right">
         <Coin value={g.coins} />
         <LangChip g={g} dark inline />

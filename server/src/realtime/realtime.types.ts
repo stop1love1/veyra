@@ -1,7 +1,7 @@
 // Realtime presence + seating types. Presence is ephemeral (in-memory only) —
 // nothing here is persisted to Mongo.
 
-export type Anim = 'idle' | 'walk' | 'sit';
+export type Anim = 'idle' | 'walk' | 'sit' | 'gsit' | 'lie';
 
 /** Full per-player state broadcast to everyone in the shared world. */
 export interface PlayerState {
@@ -19,6 +19,8 @@ export interface PlayerState {
   seatId: string | null;
   msg: string; // latest chat text ('' = none)
   msgAt: number; // server wall-clock ms of the latest chat (0 = never)
+  emote: string; // latest emote/action name ('' = none)
+  emoteAt: number; // server wall-clock ms of the latest emote (0 = never)
 }
 
 /** Handshake the client emits once on connect (and again on reconnect). */
@@ -44,4 +46,9 @@ export interface StatePayload {
 /** A chat message the player typed. */
 export interface ChatPayload {
   text: string;
+}
+
+/** An emote/action the player triggered (wave, dance, bow…). */
+export interface EmotePayload {
+  name: string;
 }

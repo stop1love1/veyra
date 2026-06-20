@@ -9,7 +9,7 @@ import {
 import { OnModuleDestroy } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
 import { RealtimeService } from './realtime.service';
-import type { ChatPayload, JoinPayload, StatePayload } from './realtime.types';
+import type { ChatPayload, EmotePayload, JoinPayload, StatePayload } from './realtime.types';
 
 const ROOM = 'world';
 const SNAPSHOT_MS = 100; // ~10 Hz presence broadcast
@@ -110,5 +110,13 @@ export class RealtimeGateway
     if (!id || !payload) return;
     // Stored on presence; it rides out in the next snapshot (no extra broadcast).
     this.svc.setMessage(id, payload.text, Date.now());
+  }
+
+  @SubscribeMessage('emote')
+  onEmote(client: Socket, payload: EmotePayload): void {
+    const id = this.socketToId.get(client.id);
+    if (!id || !payload) return;
+    // Stored on presence; rides out in the next snapshot (same path as chat).
+    this.svc.setEmote(id, payload.name, Date.now());
   }
 }

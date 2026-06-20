@@ -6,8 +6,17 @@ const ACTION_KEYS = ['shift', ' '];   // shift = run, space = jump
 /** WASD / arrow-key movement (+ shift run / space jump). Returns { keys, dispose }. */
 export function createKeyboard() {
   const keys = {};
+  // Clearing in place keeps the same `keys` object reference the engines hold.
+  const clearKeys = () => { for (const k in keys) keys[k] = false; };
   const onKey = (e, down) => {
     if (e.key == null) return;   // some events (autofill / IME / media keys) have no .key
+    // Ctrl / Cmd / Alt + key is a browser/OS shortcut (Ctrl+W close tab, Ctrl+S
+    // save, Cmd+… on macOS), NOT movement — and the browser frequently SWALLOWS
+    // the matching key-up while the modifier is held, latching a move key so the
+    // avatar walks on its own in one direction. Any time a modifier is in play,
+    // release everything and bail (also stops the avatar the instant Ctrl goes
+    // down, so a key already held can't get stuck behind it).
+    if (e.ctrlKey || e.metaKey || e.altKey) { clearKeys(); return; }
     const k = e.key.toLowerCase();
     if (!MOVE_KEYS.includes(k) && !ACTION_KEYS.includes(k)) return;
     // On key-DOWN, ignore game keys while typing in a form field (e.g. the gate
@@ -27,9 +36,7 @@ export function createKeyboard() {
   // arrive. If the window loses focus (Alt-Tab, another window/DevTools, an OS
   // notification) or the tab is hidden while a key is down, the browser delivers
   // the key-up elsewhere — leaving the key latched and the avatar walking on its
-  // own ("stuck key"). Clearing in place keeps the same `keys` object reference
-  // the engines hold.
-  const clearKeys = () => { for (const k in keys) keys[k] = false; };
+  // own ("stuck key").
   const onBlur = () => clearKeys();
   const onVis = () => { if (document.hidden) clearKeys(); };
   window.addEventListener('keydown', kd);
