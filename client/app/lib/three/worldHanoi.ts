@@ -3400,10 +3400,10 @@ export function createVeyraWorld(container, opts) {
   const baseFov = camera.fov;
   let prevPx = 0, prevPz = 0, camSpeed = 0;
   const clampDist = (d) => Math.max(CAM_MIN, Math.min(CAM_MAX, d));
-  // Wall-avoidance auto-pulled the camera in/out while orbiting near buildings,
-  // which read as an unwanted "zoom on drag". Disabled: drag = pure 360° orbit,
-  // distance only changes via wheel/pinch.
-  const CAM_WALL_AVOID = false;
+  // Wall-avoidance keeps the camera OUT of buildings when you orbit next to one.
+  // It's kept ON (without it the camera clips inside houses) but the pull-in is now
+  // gently smoothed below so it no longer reads as a jarring "zoom on drag".
+  const CAM_WALL_AVOID = true;
   const dom = renderer.domElement;
   const orbit = { pointers: new Map(), lastDist: 0 };
   const camDown = (e) => { orbit.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY }); try { dom.setPointerCapture(e.pointerId); } catch (_) {} };
@@ -3419,7 +3419,9 @@ export function createVeyraWorld(container, opts) {
       orbit.lastDist = d;
     } else {
       camYaw -= dx * 0.007;
-      camElev = Math.max(0.12, Math.min(CAM_ELEV_MAX, camElev + dy * 0.005));
+      // Lower bound goes NEGATIVE so the camera can drop below the head and tilt the
+      // view UP toward the sky (was clamped at 0.12 → could only look down/level).
+      camElev = Math.max(-0.55, Math.min(CAM_ELEV_MAX, camElev + dy * 0.005));
     }
   };
   const camUp = (e) => { orbit.pointers.delete(e.pointerId); if (orbit.pointers.size < 2) orbit.lastDist = 0; };
@@ -3848,8 +3850,9 @@ export function createVeyraWorld(container, opts) {
       // Sit just before the nearest wall — never beyond it (no clip), small floor.
       if (hit < hd) wantD = Math.min(camDist, Math.max(0.35, (hit - 0.4) / hCos));
     }
-    // Pull in fast (no clip), ease back out slowly (no pop).
-    camDcur += (wantD - camDcur) * Math.min(1, dt * (wantD < camDcur ? 20 : 4));
+    // Pull in smoothly (no jarring zoom-snap, but quick enough to avoid clipping),
+    // ease back out slowly (no pop).
+    camDcur += (wantD - camDcur) * Math.min(1, dt * (wantD < camDcur ? 9 : 4));
 
     // Player planar speed → a subtle dynamic FOV kick when moving fast.
     const instSpeed = Math.hypot(pp.x - prevPx, pp.z - prevPz) / Math.max(dt, 1e-3);
@@ -3865,9 +3868,9 @@ export function createVeyraWorld(container, opts) {
     const offZ = camDcur * Math.cos(camElevCur) * Math.cos(camYawCur);
     const offY = camDcur * Math.sin(camElevCur);
     camTarget.set(pp.x + offX, pivotY + offY, pp.z + offZ);
-    if (camTarget.y < 0.6) camTarget.y = 0.6;     // ground/lake clamp
+    if (camTarget.y < 0.4) camTarget.y = 0.4;     // ground/lake clamp (low → lets the view tilt up)
     camera.position.lerp(camTarget, Math.min(1, dt * 9));
-    if (camera.position.y < 0.6) camera.position.y = 0.6;
+    if (camera.position.y < 0.4) camera.position.y = 0.4;
     tmp.set(pp.x, pivotY, pp.z);
     if (!lookInit) { lookTarget.copy(tmp); lookInit = true; }
     lookTarget.x = damp(lookTarget.x, tmp.x, 16);
