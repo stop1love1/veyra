@@ -14,6 +14,7 @@ export interface Identity {
   hue: number;
   style: string;
   age: number;
+  avatarUrl: string;
   authed: boolean;
 }
 

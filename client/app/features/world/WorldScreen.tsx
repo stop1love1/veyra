@@ -59,6 +59,7 @@ function World3D({ g }: { g: Game }) {
     sit?: () => void;
     stand?: () => void;
     emote?: (name: string) => void;
+    setExpression?: (name: string) => void;
     say?: (text: string) => void;
     net?: {
       snapshot: (states: unknown[]) => void;
@@ -132,7 +133,7 @@ function World3D({ g }: { g: Game }) {
     const selfId = g.auth.user ? g.auth.user.id : guestName;
     const selfName = g.auth.user ? (g.auth.user.name || g.auth.user.email) : guestName;
     worldApi.current = createVeyraWorld(ref.current, {
-      playerHue: g.player.hue, playerAge: g.player.age, lite: false,
+      playerHue: g.player.hue, playerAge: g.player.age, playerAvatarUrl: g.player.avatarUrl || '', lite: false,
       shops,
       // Whether the player starts INSIDE the fence (signed in) or outside (guest).
       authed: !!g.auth.user,
@@ -158,7 +159,7 @@ function World3D({ g }: { g: Game }) {
 
     // Realtime connection (created after the world so net.* exists for handlers).
     rtRef.current = createRealtime(
-      { id: selfId, name: selfName, hue: g.player.hue, style: 'minimal', age: g.player.age ?? 24, authed: !!g.auth.user },
+      { id: selfId, name: selfName, hue: g.player.hue, style: 'minimal', age: g.player.age ?? 24, avatarUrl: g.player.avatarUrl || '', authed: !!g.auth.user },
       {
         onSnapshot: (states) => worldApi.current?.net?.snapshot(states),
         onLeave: (id) => worldApi.current?.net?.playerLeft(id),
@@ -300,13 +301,21 @@ function World3D({ g }: { g: Game }) {
       {ready && !chatOpen && (
         <div className="v-emote-wrap">
           {emoteOpen && (
-            <div className="v-emote-pop">
-              <button className="v-emote-btn" onClick={() => { worldApi.current?.emote?.('wave'); setEmoteOpen(false); }}>
-                <span className="v-emote-emoji">👋</span>{g.lang === 'en' ? 'Wave' : 'Vẫy tay'}
-              </button>
-              <button className="v-emote-btn" onClick={() => { worldApi.current?.emote?.('celebrate'); setEmoteOpen(false); }}>
-                <span className="v-emote-emoji">🎉</span>{g.lang === 'en' ? 'Celebrate' : 'Ăn mừng'}
-              </button>
+            <div className="v-emote-panel">
+              <span className="v-emote-panel-lbl">{g.lang === 'en' ? 'Actions' : 'Hành động'}</span>
+              <div className="v-emote-grid">
+                {([['wave', '👋'], ['dance', '💃'], ['bow', '🙇'], ['clap', '👏'], ['point', '👉'], ['arms-crossed', '🙅'], ['think', '🤔']] as const).map(([name, emoji]) => (
+                  <button key={name} className="v-emote-cell" title={name}
+                          onClick={() => { worldApi.current?.emote?.(name); setEmoteOpen(false); }}>{emoji}</button>
+                ))}
+              </div>
+              <span className="v-emote-panel-lbl">{g.lang === 'en' ? 'Expressions' : 'Biểu cảm'}</span>
+              <div className="v-emote-grid">
+                {([['neutral', '😐'], ['happy', '😊'], ['surprised', '😮'], ['sad', '😢'], ['angry', '😠']] as const).map(([name, emoji]) => (
+                  <button key={name} className="v-emote-cell" title={name}
+                          onClick={() => { worldApi.current?.setExpression?.(name); }}>{emoji}</button>
+                ))}
+              </div>
             </div>
           )}
           <button

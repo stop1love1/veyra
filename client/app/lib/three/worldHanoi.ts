@@ -532,6 +532,7 @@ export function createVeyraWorld(container, opts) {
   let ready = false;
   let raf = 0, running = true;
   let player = null, blob = null;   // player.parts is read directly (GLB swap-safe)
+  let heldExpr = null, heldExprUntil = 0;   // a user-picked expression holds ~4 s over the auto neutral/surprised
   let SPAWN = new THREE.Vector3(0, 0, -300);   // overwritten once the lake is known
   let spawnYaw = 0;                            // facing-the-lake rotation at spawn
   let MAXR = 520;                              // player clamp radius (extentR + margin)
@@ -1675,7 +1676,7 @@ export function createVeyraWorld(container, opts) {
 
   // ── Remote players ───────────────────────────────────────────────────────
   function makeRemote(state) {
-    const av = buildAvatar({ hue: state.hue, style: state.style, age: state.age });
+    const av = createAvatar({ url: state.avatarUrl || '', hue: state.hue, style: state.style, age: state.age });
     av.group.position.set(state.x, 0, state.z);
     av.group.rotation.y = state.rotY || 0;
     scene.add(av.group);
@@ -1694,8 +1695,9 @@ export function createVeyraWorld(container, opts) {
     const r = remotePlayers.get(id); if (!r) return;
     removeBubble(id);
     scene.remove(r.group);
-    r.group.traverse((o) => { if (o.isMesh) { o.geometry && o.geometry.dispose && o.geometry.dispose(); } });
+    r.group.traverse((o) => { if (o.isMesh || o.isSkinnedMesh) { o.geometry && o.geometry.dispose && o.geometry.dispose(); } });
     if (r.av && r.av.mats) for (const k in r.av.mats) { const m = r.av.mats[k]; m && m.dispose && m.dispose(); }
+    r.av && r.av.dispose && r.av.dispose();   // GLB remotes: stop mixer + free materials
     remotePlayers.delete(id);
   }
   // Apply a fresh world snapshot: upsert every remote, retarget transforms.
@@ -1734,18 +1736,19 @@ export function createVeyraWorld(container, opts) {
       g.position.y += (gy - g.position.y) * Math.min(1, dt * 10);
       let dy = ((gRotY - g.rotation.y + Math.PI) % (Math.PI * 2)) - Math.PI;
       g.rotation.y += dy * Math.min(1, dt * 10);
-      if (seated) { applySitPose(r.parts, g, true); }
+      const rp = r.av.parts;   // live getter — GLB→procedural fallback swaps parts under us
+      if (seated) { applySitPose(rp, g, true); }
       else {
-        applySitPose(r.parts, g, false);
+        applySitPose(rp, g, false);
         const mv = r.anim === 'walk';
         r.phase += dt * (mv ? 10 : 0);
         const sw = mv ? 0.6 : 0;
         const ez = (p, v) => p.rotation.x += (v - p.rotation.x) * Math.min(1, dt * 12);
-        ez(r.parts.legL, Math.sin(r.phase) * sw); ez(r.parts.legR, -Math.sin(r.phase) * sw);
-        ez(r.parts.armL, -Math.sin(r.phase) * sw * 0.7); ez(r.parts.armR, Math.sin(r.phase) * sw * 0.7);
+        ez(rp.legL, Math.sin(r.phase) * sw); ez(rp.legR, -Math.sin(r.phase) * sw);
+        ez(rp.armL, -Math.sin(r.phase) * sw * 0.7); ez(rp.armR, Math.sin(r.phase) * sw * 0.7);
       }
       // Face life (blink / idle look) for remote avatars too.
-      r.av.update && r.av.update(dt, { moving: !seated && r.anim === 'walk' });
+      r.av.update && r.av.update(dt, { moving: !seated && r.anim === 'walk', sitting: seated });
       if (r.tag) r.tag.quaternion.copy(camera.quaternion);
     }
   }
@@ -3767,7 +3770,10 @@ export function createVeyraWorld(container, opts) {
     }
     // Face layer (blink / idle look / expression / emote), AFTER the base pose so
     // it composites on top. Wide-eyed surprise mid-jump; neutral when grounded.
-    if (!sitting && !emoting) player.setExpression(pp.y <= baseY + 0.05 ? 'neutral' : 'surprised');
+    if (!sitting && !emoting) {
+      if (heldExpr && now < heldExprUntil) player.setExpression(heldExpr);
+      else { heldExpr = null; player.setExpression(pp.y <= baseY + 0.05 ? 'neutral' : 'surprised'); }
+    }
     player.update(dt, { moving, grounded: pp.y <= baseY + 0.05, sitting });
     blob.position.set(pp.x, pp.y + 0.05, pp.z);
 
@@ -4177,6 +4183,7 @@ export function createVeyraWorld(container, opts) {
     stand() { requestStand(); },
     // Emotes (driven by the HUD emote button + the 1/2 hotkeys).
     emote(name) { if (player && !sitting) player.playEmote(name); },
+    setExpression(name) { if (player && player.setExpression) { player.setExpression(name); heldExpr = name; heldExprUntil = performance.now() + 4000; } },
     // Chat: show the local player's own bubble immediately (optimistic); remote
     // bubbles arrive via the presence snapshot.
     say(text) { console.log('[chat] api.say called, SELF_ID=', SELF_ID, 'text=', JSON.stringify(text)); if (SELF_ID) say(SELF_ID, text); },

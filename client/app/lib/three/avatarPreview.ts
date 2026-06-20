@@ -10,7 +10,7 @@
 // 1 world unit ≈ 1 metre. All resources are freed in dispose().
 
 import * as THREE from 'three';
-import { buildAvatar } from './shared/avatar';
+import { createAvatar } from './shared/avatarFactory';
 import { hsl } from './shared/helpers';
 
 export function createAvatarPreview(container, cfg = {}) {
@@ -47,9 +47,12 @@ export function createAvatarPreview(container, cfg = {}) {
   const pedMat = new THREE.MeshStandardMaterial({ color: hsl(190, 0.12, 0.2), roughness: 0.85, metalness: 0, transparent: true, opacity: 0.55 });
   const pedestal = new THREE.Mesh(pedGeo, pedMat); pedestal.position.y = 0.01; scene.add(pedestal);
 
-  // The character.
-  const avatar = buildAvatar({ hue: cfg.hue, style: cfg.style, age: cfg.age, skinColor: cfg.skinColor });
-  const pivot = new THREE.Group(); pivot.add(avatar.group); scene.add(pivot);
+  // The character — a Ready Player Me GLB when `url` is set, else procedural. Track
+  // the current params so setUrl() can rebuild (GLB ↔ procedural) with them.
+  let curHue = cfg.hue, curStyle = cfg.style, curAge = cfg.age, curUrl = cfg.url || '';
+  const pivot = new THREE.Group(); scene.add(pivot);
+  let avatar = createAvatar({ url: curUrl, hue: curHue, style: curStyle, age: curAge, skinColor: cfg.skinColor });
+  pivot.add(avatar.group);
 
   // Demo liveliness: cycle expression + an occasional wave so the face shows off.
   const EXPR = ['happy', 'neutral', 'surprised', 'happy', 'neutral'];
@@ -79,14 +82,25 @@ export function createAvatarPreview(container, cfg = {}) {
   if (ro) ro.observe(container);
 
   return {
-    setAge(age) { avatar.setAge(age); },
-    setHue(hue) { avatar.setHue(hue); },
-    setStyle(style) { avatar.setStyle(style); },
+    // Procedural-only tweaks (no-op on a GLB avatar, which gets its look from RPM).
+    setAge(age) { curAge = age; avatar.setAge && avatar.setAge(age); },
+    setHue(hue) { curHue = hue; avatar.setHue && avatar.setHue(hue); },
+    setStyle(style) { curStyle = style; avatar.setStyle && avatar.setStyle(style); },
+    /** Swap the RPM avatar URL (''/falsy → procedural). Rebuilds the avatar. */
+    setUrl(url) {
+      if ((url || '') === curUrl) return;
+      curUrl = url || '';
+      try { avatar.dispose && avatar.dispose(); } catch (_) {}
+      if (avatar.group && avatar.group.parent) avatar.group.parent.remove(avatar.group);
+      avatar = createAvatar({ url: curUrl, hue: curHue, style: curStyle, age: curAge, skinColor: cfg.skinColor });
+      pivot.add(avatar.group);
+    },
     /** Pause/resume the turntable (e.g. while the user drags an orbit later). */
     setSpin(on) { spin = !!on; },
     dispose() {
       disposed = true;
       cancelAnimationFrame(raf);
+      try { avatar.dispose && avatar.dispose(); } catch (_) {}
       if (ro) ro.disconnect();
       scene.traverse((o) => {
         if (o.isMesh || o.isLine) {
