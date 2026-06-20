@@ -161,8 +161,8 @@ export function createVeyraWorld(container, opts) {
   }
 
   // ── Hanoi-specific landmark materials (a few dedicated tints) ─────
-  const redPaint = new THREE.MeshStandardMaterial({ color: 0xc0392b, roughness: 0.6, metalness: 0.0 });   // The Huc vermilion
-  const roofTile = new THREE.MeshStandardMaterial({ color: hsl(14, 0.5, 0.34), roughness: 0.78, metalness: 0.0 }); // temple terracotta
+  const redPaint = new THREE.MeshStandardMaterial({ color: 0xcf3b29, roughness: 0.6, metalness: 0.0 });   // The Huc vermilion (đỏ son tươi)
+  const roofTile = new THREE.MeshStandardMaterial({ color: hsl(17, 0.55, 0.37), roughness: 0.78, metalness: 0.0 }); // temple terracotta
   const mossStone = new THREE.MeshStandardMaterial({ color: hsl(86, 0.16, 0.42), roughness: 0.96, metalness: 0.0 }); // weathered stone
   const darkWood = new THREE.MeshStandardMaterial({ color: hsl(26, 0.42, 0.22), roughness: 0.82, metalness: 0.0 });  // temple timber
   const localMats = [redPaint, roofTile, mossStone, darkWood];
@@ -255,9 +255,9 @@ export function createVeyraWorld(container, opts) {
     for (let i = 0; i < 700; i++) {
       const x = Math.random() * size, y = Math.random() * size, r = 6 + Math.random() * 26;
       const dry = Math.random() < 0.12;
-      const h = dry ? 60 + Math.random() * 20 : 88 + Math.random() * 36;
-      const s = dry ? 32 : 38 + Math.random() * 26;
-      const l = (dry ? 30 : 24) + Math.random() * 20;
+      const h = dry ? 52 + Math.random() * 22 : 88 + Math.random() * 22;
+      const s = dry ? 30 : 34 + Math.random() * 16;
+      const l = (dry ? 30 : 24) + Math.random() * 18;
       ctx.fillStyle = `hsla(${h},${s}%,${l}%,0.22)`;
       ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fill();
     }
@@ -265,7 +265,7 @@ export function createVeyraWorld(container, opts) {
     for (let i = 0; i < 2600; i++) {
       const x = Math.random() * size, y = Math.random() * size;
       const len = 2 + Math.random() * 5, ang = -Math.PI / 2 + (Math.random() - 0.5) * 0.7;
-      ctx.strokeStyle = `hsla(${92 + Math.random() * 36},${44 + Math.random() * 26}%,${20 + Math.random() * 26}%,0.5)`;
+      ctx.strokeStyle = `hsla(${88 + Math.random() * 22},${38 + Math.random() * 16}%,${20 + Math.random() * 22}%,0.5)`;
       ctx.lineWidth = Math.random() < 0.5 ? 1 : 1.5;
       ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + Math.cos(ang) * len, y + Math.sin(ang) * len); ctx.stroke();
     }
@@ -351,7 +351,7 @@ export function createVeyraWorld(container, opts) {
       waterNormals,
       sunDirection: new THREE.Vector3(0, 1, 0),
       sunColor: 0xffffff,
-      waterColor: new THREE.Color().setHSL(146 / 360, 0.5, 0.19).getHex(), // "lục thủy" — the green Hoan Kiem water
+      waterColor: new THREE.Color().setHSL(150 / 360, 0.46, 0.22).getHex(), // "lục thủy" — the green Hoan Kiem water
       distortionScale: 2.4,
       fog: !!scene.fog,
       alpha: 0.95,
@@ -410,21 +410,21 @@ export function createVeyraWorld(container, opts) {
   // in the wind; trunks cast shadow on high; alpha cards never cast shadow.
   function buildRealisticTrees(treeList, castShadows) {
     const lod = q.tier === 'high' ? 1 : q.tier === 'mid' ? 0.8 : 0.6;   // fewer cards on weaker tiers
-    const palmTrunkMat = new THREE.MeshStandardMaterial({ color: hsl(34, 0.22, 0.5), roughness: 0.9, metalness: 0 });
+    const palmTrunkMat = new THREE.MeshStandardMaterial({ color: hsl(32, 0.2, 0.4), roughness: 0.9, metalness: 0 });
     localMats.push(palmTrunkMat);
 
     // Species table. `mode`: 'volume' = rounded broadleaf crown of fanned cards;
     // 'palm' = a slim trunk topped by radiating frond cards. `cards` is per-tree.
     const SPECIES = [
       { key: 'broadleaf', weight: 0.42, mode: 'volume', cards: Math.round(6 * lod),
-        tex: makeLeafTexture({ hueBase: 96, hueSpread: 30, leafMin: 6, leafMax: 15, count: 340 }),
-        trunkMat: mats.bark, trunkTop: 0.12, trunkBot: 0.30, hMin: 5.0, hMax: 8.5, canMin: 1.8, canMax: 3.1, vstretch: 1.0, tint: [104, 0.4, 0.36] },
+        tex: makeLeafTexture({ hueBase: 96, hueSpread: 24, leafMin: 6, leafMax: 15, count: 340 }),
+        trunkMat: mats.bark, trunkTop: 0.12, trunkBot: 0.30, hMin: 5.0, hMax: 8.5, canMin: 1.8, canMax: 3.1, vstretch: 1.0, tint: [104, 0.34, 0.35] },
       { key: 'slender', weight: 0.24, mode: 'volume', cards: Math.round(5 * lod),
         tex: makeLeafTexture({ hueBase: 110, hueSpread: 22, leafMin: 5, leafMax: 11, count: 300 }),
-        trunkMat: mats.bark, trunkTop: 0.10, trunkBot: 0.22, hMin: 7.0, hMax: 11.0, canMin: 1.2, canMax: 2.0, vstretch: 1.6, tint: [116, 0.42, 0.34] },
+        trunkMat: mats.bark, trunkTop: 0.10, trunkBot: 0.22, hMin: 7.0, hMax: 11.0, canMin: 1.2, canMax: 2.0, vstretch: 1.6, tint: [112, 0.32, 0.36] },
       { key: 'flower', weight: 0.14, mode: 'volume', cards: Math.round(6 * lod),
         tex: makeLeafTexture({ hueBase: 92, hueSpread: 26, leafMin: 6, leafMax: 14, count: 340, warm: true }),
-        trunkMat: mats.bark, trunkTop: 0.14, trunkBot: 0.30, hMin: 5.0, hMax: 8.0, canMin: 1.9, canMax: 3.0, vstretch: 0.9, tint: [40, 0.5, 0.5] },
+        trunkMat: mats.bark, trunkTop: 0.14, trunkBot: 0.30, hMin: 5.0, hMax: 8.0, canMin: 1.9, canMax: 3.0, vstretch: 0.9, tint: [104, 0.38, 0.37] },
       { key: 'palm', weight: 0.20, mode: 'palm', cards: Math.round(9 * lod),
         tex: makePalmFrondTexture(), trunkMat: palmTrunkMat, trunkTop: 0.16, trunkBot: 0.28,
         hMin: 7.0, hMax: 12.0, canMin: 2.2, canMax: 3.2, vstretch: 1.0, tint: [110, 0.4, 0.4] },
@@ -627,7 +627,7 @@ export function createVeyraWorld(container, opts) {
     camera.updateProjectionMatrix();
 
     // ── GROUND — a large warm-earth plane under everything (covers the skyline) ──
-    const groundMat = new THREE.MeshStandardMaterial({ color: hsl(40, 0.1, 0.42), roughness: 1, metalness: 0 });
+    const groundMat = new THREE.MeshStandardMaterial({ color: hsl(38, 0.05, 0.40), roughness: 1, metalness: 0 });
     const groundGeo = new THREE.CircleGeometry(SKYLINE_OUTER + extentR * 0.4, 96);
     ownedGeoms.push(groundGeo);
     const ground = new THREE.Mesh(groundGeo, groundMat);
@@ -654,8 +654,8 @@ export function createVeyraWorld(container, opts) {
       // across every park patch. color stays near-white so the texture's own greens
       // (and blade detail) read true; pitch gets a cooler turf tint.
       const grassTex = makeGrassTexture(); grassTex.repeat.set(0.3, 0.3); ownedTextures.push(grassTex);
-      const lawnMat = new THREE.MeshStandardMaterial({ color: hsl(96, 0.12, 0.66), roughness: 1, metalness: 0, map: grassTex });
-      const pitchMat = new THREE.MeshStandardMaterial({ color: hsl(128, 0.22, 0.6), roughness: 1, metalness: 0, map: grassTex });
+      const lawnMat = new THREE.MeshStandardMaterial({ color: hsl(96, 0.13, 0.50), roughness: 1, metalness: 0, map: grassTex });
+      const pitchMat = new THREE.MeshStandardMaterial({ color: hsl(120, 0.2, 0.5), roughness: 1, metalness: 0, map: grassTex });
       // polygonOffset so the greens never z-fight against the ground beneath them.
       lawnMat.polygonOffset = true; lawnMat.polygonOffsetFactor = -1; lawnMat.polygonOffsetUnits = -1;
       pitchMat.polygonOffset = true; pitchMat.polygonOffsetFactor = -1; pitchMat.polygonOffsetUnits = -1;
@@ -819,11 +819,11 @@ export function createVeyraWorld(container, opts) {
     // procedural rooftop topper (water tank / AC / laundry / parapet).
     const bucketGeoms = facades.materials.map(() => []);  // per-material wall geometry lists
     const roofGeoms = [];                                  // flat roof caps (one merged mesh)
-    const roofMat = new THREE.MeshStandardMaterial({ color: hsl(28, 0.06, 0.34), roughness: 0.95, metalness: 0 });
+    const roofMat = new THREE.MeshStandardMaterial({ color: hsl(30, 0.05, 0.32), roughness: 0.95, metalness: 0 });
     localMats.push(roofMat);
     // Pitched terracotta-tiled hip roofs (one merged mesh). Most low Hanoi
     // tube-houses get one of these instead of a flat cap; the rest stay flat.
-    const roofTileMat = new THREE.MeshStandardMaterial({ color: hsl(14, 0.5, 0.34), roughness: 0.82, metalness: 0 });
+    const roofTileMat = new THREE.MeshStandardMaterial({ color: hsl(17, 0.55, 0.37), roughness: 0.82, metalness: 0 });
     localMats.push(roofTileMat);
     const roofTileGeoms = [];                              // pitched hip roofs (one merged mesh)
     const pitchedSet = new Set();                          // polys given a pitched roof (skip flat detail)
@@ -1051,7 +1051,7 @@ export function createVeyraWorld(container, opts) {
     // and carry NO collision + NO shadow — pure backdrop framing the playable core.
     (function proceduralSkyline() {
       // Own cheap plaster mats — the far backdrop staying flat-coloured is fine.
-      const SKY_HUES = [40, 205, 20, 120, 350];
+      const SKY_HUES = [40, 200, 12, 120, 210, 35, 180];
       const skylineMats = SKY_HUES.map((h) => mats.plaster(h));
       localMats.push(...skylineMats);
       const cap = q.tier === 'low' ? 80 : q.tier === 'mid' ? 250 : 500;
@@ -1941,6 +1941,8 @@ export function createVeyraWorld(container, opts) {
     };
     const wrect = (g, cx, cz, w, d) =>
       [[cx - w / 2, cz - d / 2], [cx + w / 2, cz - d / 2], [cx + w / 2, cz + d / 2], [cx - w / 2, cz + d / 2]].map(([lx, lz]) => wpt(g, lx, lz));
+    // Accurate box collision for an interior prop (so the player can't walk through it).
+    const solidBox = (g, cx, cz, w, d) => addBldgCollision(wrect(g, cx, cz, w, d));
     const site = (k) => landmarkSites.find((s) => s.key === k);
 
     // Generic ENTERABLE shell: solid walls (footprint-polygon collision) with a
@@ -2018,12 +2020,16 @@ export function createVeyraWorld(container, opts) {
         bx(g, gilt, 0.12, 1.0, 0.12, tx, towerH + 4.1, halfD - tw / 2);          // cross (vertical)
         bx(g, gilt, 0.6, 0.12, 0.12, tx, towerH + 4.15, halfD - tw / 2);         // cross (arms)
       }
-      // Interior: pews + an altar at the back.
+      // Interior: pews flanking a central aisle + an altar at the back (solid).
+      const pewW = S.W * 0.3, pewX = S.W * 0.3;   // two banks, clear centre aisle
       for (let i = 0; i < 4; i++) {
-        const z = -halfD + 3 + i * 2.2;
-        for (const sgn of [-1, 1]) bx(g, darkWood, S.W * 0.3, 0.5, 0.5, sgn * S.W * 0.22, 0.7, z);
+        const z = -halfD + 3.2 + i * 2.2;
+        for (const sgn of [-1, 1]) {
+          bx(g, darkWood, pewW, 0.5, 0.5, sgn * pewX, 0.7, z);
+          solidBox(g, sgn * pewX, z, pewW, 0.5);
+        }
       }
-      bx(g, white, 2.4, 1.0, 1.0, 0, 0.6, -halfD + 1.6);   // altar
+      bx(g, white, 2.4, 1.0, 1.0, 0, 0.6, -halfD + 1.6); solidBox(g, 0, -halfD + 1.6, 2.4, 1.0);   // altar
       bx(g, gilt, 0.16, 1.4, 0.16, 0, 1.7, -halfD + 1.6);  // cross on altar
       registerLandmark(handle);
     })();
@@ -2051,9 +2057,16 @@ export function createVeyraWorld(container, opts) {
       bx(g, white, span + 0.8, 0.9, 1.0, 0, colY + 0.8, pz);     // entablature
       const ped = new THREE.Mesh(new THREE.ConeGeometry(span / 2 + 0.4, 1.5, 3), white);
       ped.rotation.y = Math.PI / 2; ped.position.set(0, colY + 2.05, pz - 0.1); g.add(ped); ownedGeoms.push(ped.geometry);
-      // Interior: rows of seats + a stage at the back.
-      for (let i = 0; i < 4; i++) bx(g, carpet, S.W * 0.7, 0.5, 0.6, 0, 0.7, -halfD + 3.2 + i * 1.7);
-      bx(g, darkWood, S.W * 0.8, 1.2, 1.4, 0, 0.6, -halfD + 1.6);   // stage
+      // Interior: seat banks flanking a central aisle + a stage at the back (solid).
+      const seatW = S.W * 0.3, seatX = S.W * 0.28;
+      for (let i = 0; i < 4; i++) {
+        const z = -halfD + 3.4 + i * 1.7;
+        for (const sgn of [-1, 1]) {
+          bx(g, carpet, seatW, 0.5, 0.6, sgn * seatX, 0.7, z);
+          solidBox(g, sgn * seatX, z, seatW, 0.6);
+        }
+      }
+      bx(g, darkWood, S.W * 0.8, 1.2, 1.4, 0, 0.6, -halfD + 1.6); solidBox(g, 0, -halfD + 1.6, S.W * 0.8, 1.4);   // stage
       registerLandmark(handle);
     })();
 
@@ -2081,9 +2094,9 @@ export function createVeyraWorld(container, opts) {
       handle.clock = { hour: mkHand(0.75, 0.1), minute: mkHand(1.1, 0.07) };
       const nameSign = mats.makeSign('BƯU ĐIỆN HÀ NỘI', { width: 6.0, bg: '#143e6e' });
       nameSign.position.set(0, S.H - 0.8, halfD + 0.03); g.add(nameSign);
-      // Interior: a service counter + a waiting bench.
-      bx(g, darkWood, S.W * 0.7, 1.1, 1.0, 0, 0.55, -halfD + 1.5);
-      bx(g, mats.paving, S.W * 0.5, 0.45, 0.5, 0, 0.28, 1.0);
+      // Interior: a service counter at the back + a waiting bench (both solid).
+      bx(g, darkWood, S.W * 0.7, 1.1, 1.0, 0, 0.55, -halfD + 1.5); solidBox(g, 0, -halfD + 1.5, S.W * 0.7, 1.0);
+      bx(g, mats.paving, S.W * 0.5, 0.45, 0.5, 0, 0.28, 1.2); solidBox(g, 0, 1.2, S.W * 0.5, 0.5);
       registerLandmark(handle);
     })();
   }
@@ -2267,7 +2280,7 @@ export function createVeyraWorld(container, opts) {
   // ink-slab gate) stand on the north shore at the temple entrance, before The Huc
   // bridge; the Ly Thai To monument sits in a plaza on the lake's east side.
   function buildHoanKiemMonuments(ox, oz, northZ, lakeR) {
-    const bronze = new THREE.MeshStandardMaterial({ color: hsl(150, 0.28, 0.30), roughness: 0.55, metalness: 0.7 });
+    const bronze = new THREE.MeshStandardMaterial({ color: hsl(30, 0.32, 0.32), roughness: 0.55, metalness: 0.7 });
     const stonePale = new THREE.MeshStandardMaterial({ color: hsl(40, 0.10, 0.62), roughness: 0.9, metalness: 0 });
     localMats.push(bronze, stonePale);
 
