@@ -4,7 +4,7 @@ import data from '../public/data/hanoi.json';
 describe('hanoi.json shape (post-enrichment)', () => {
   it('keeps the core layers', () => {
     expect(Array.isArray(data.buildings)).toBe(true);
-    expect(data.buildings.length).toBeGreaterThan(1000);
+    expect(data.buildings.length).toBeGreaterThan(10000); // full 1500m extent, not the 700m subset
     expect(Array.isArray(data.roads)).toBe(true);
     expect(Array.isArray(data.water)).toBe(true);
   });
