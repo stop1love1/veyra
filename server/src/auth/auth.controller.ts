@@ -36,7 +36,12 @@ export class AuthController {
 
   @UseGuards(JwtAuthGuard)
   @Get('me')
-  me(@CurrentUser() user: AuthUser) {
-    return this.usersService.findByIdOrFail(user.userId);
+  async me(@CurrentUser() user: AuthUser) {
+    // Return the SAME public shape as login/register (notably `id`, not the
+    // raw document's `_id`). The schema's toJSON has no `virtuals: true`, so a
+    // raw doc would serialize without `id` — which silently broke any client
+    // code reading user.id (e.g. the multiplayer self-id → chat bubbles).
+    const doc = await this.usersService.findByIdOrFail(user.userId);
+    return this.authService.toPublic(doc);
   }
 }

@@ -146,7 +146,7 @@ export class AuthService {
     return { accessToken, refreshToken };
   }
 
-  private toPublic(user: UserDocument): PublicUser {
+  toPublic(user: UserDocument): PublicUser {
     return {
       id: user.id,
       email: user.email,

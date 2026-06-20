@@ -1826,7 +1826,6 @@ export function createVeyraWorld(container, opts) {
     const targetGroup = (SELF_ID && id === SELF_ID)
       ? (player && player.group)
       : (remotePlayers.get(id) && remotePlayers.get(id).group);
-    console.log('[chat] say id=', id, 'SELF_ID=', SELF_ID, 'player?', !!player, 'targetGroup?', !!targetGroup, 'text=', JSON.stringify(text));
     if (!targetGroup) return;
     const prev = bubbles.get(id);
     if (prev) { prev.group.remove(prev.sprite); }
@@ -3847,13 +3846,21 @@ export function createVeyraWorld(container, opts) {
           }
         }
       }
-      // Sit just before the nearest wall — never beyond it (no clip). Floor at 1.6 m
-      // so the camera can't be pulled INSIDE the avatar (body radius ~0.5 m).
-      if (hit < hd) wantD = Math.min(camDist, Math.max(1.6, (hit - 0.4) / hCos));
+      // Sit just before the nearest wall — never beyond it (no clip). Small floor so
+      // narrow alleys (ngõ/ngách) stay walkable without the camera punching through the
+      // far wall into a building; the avatar is hidden when the camera gets this close.
+      if (hit < hd) wantD = Math.min(camDist, Math.max(0.45, (hit - 0.4) / hCos));
     }
     // Pull in smoothly (no jarring zoom-snap, but quick enough to avoid clipping),
     // ease back out slowly (no pop).
     camDcur += (wantD - camDcur) * Math.min(1, dt * (wantD < camDcur ? 9 : 4));
+    // Hide the avatar (+ its blob shadow) when the camera is forced very close (tight
+    // alleys / against a wall) so we never see INSIDE its head.
+    if (player && player.group) {
+      const showAvatar = camDcur > 1.2;
+      player.group.visible = showAvatar;
+      if (blob) blob.visible = showAvatar;
+    }
 
     // Player planar speed → a subtle dynamic FOV kick when moving fast.
     const instSpeed = Math.hypot(pp.x - prevPx, pp.z - prevPz) / Math.max(dt, 1e-3);
@@ -4232,7 +4239,7 @@ export function createVeyraWorld(container, opts) {
     setExpression(name) { if (player && player.setExpression) { player.setExpression(name); heldExpr = name; heldExprUntil = performance.now() + 4000; } },
     // Chat: show the local player's own bubble immediately (optimistic); remote
     // bubbles arrive via the presence snapshot.
-    say(text) { console.log('[chat] api.say called, SELF_ID=', SELF_ID, 'text=', JSON.stringify(text)); if (SELF_ID) say(SELF_ID, text); },
+    say(text) { if (SELF_ID) say(SELF_ID, text); },
     dispose() {
       disposed = true;
       running = false; cancelAnimationFrame(raf);
