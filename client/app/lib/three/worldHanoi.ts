@@ -308,29 +308,29 @@ export function createVeyraWorld(container, opts) {
     return tex;
   }
 
-  // Procedural PALM FROND card (RGBA, alpha-cut): a central rib with angled leaflets
-  // tapering to a tip, drawn tip-UP on a tall card. Radiated from a slim trunk it
-  // reads as a fan/coconut palm — a distinct silhouette from the broadleaf canopies.
+  // Procedural PALM FROND card (RGBA, alpha-cut): a FILLED tapered blade with a
+  // serrated (pinnate) edge + midrib/veins, drawn tip-UP. Filled — NOT thin lines —
+  // so the card reads as solid foliage rather than a see-through "glass" pane.
   function makePalmFrondTexture(w = 128, h = 256) {
     const c = document.createElement('canvas'); c.width = w; c.height = h;
     const ctx = c.getContext('2d');
-    const midX = w / 2;
-    // Rib from base (bottom) to tip (top).
-    ctx.strokeStyle = 'hsla(96,40%,26%,0.95)'; ctx.lineWidth = 3;
-    ctx.beginPath(); ctx.moveTo(midX, h - 4); ctx.lineTo(midX, 10); ctx.stroke();
-    const N = 26;
-    for (let i = 0; i < N; i++) {
-      const t = i / (N - 1);
-      const y = (h - 8) - t * (h - 18);
-      const taper = Math.sin(t * Math.PI) * 0.9 + 0.1;     // longest leaflets mid-frond
-      const len = (w * 0.46) * taper;
-      const droop = 10 + t * 14;                            // leaflets angle up toward the tip
-      ctx.strokeStyle = `hsla(${94 + Math.random() * 26},${44 + Math.random() * 22}%,${22 + Math.random() * 16}%,0.92)`;
-      ctx.lineWidth = 2;
-      [-1, 1].forEach((sd) => {
-        ctx.beginPath(); ctx.moveTo(midX, y);
-        ctx.lineTo(midX + sd * len, y - droop); ctx.stroke();
-      });
+    const midX = w / 2, N = 16;
+    const widthAt = (t) => (w * 0.42) * (Math.sin(t * Math.PI) * 0.85 + 0.1) + w * 0.03;
+    const yAt = (t) => (h - 6) - t * (h - 14);
+    // Filled blade outline with the leaflet serration baked into the edge as bumps.
+    ctx.beginPath(); ctx.moveTo(midX, yAt(0));
+    for (let i = 0; i <= N; i++) { const t = i / N; const bump = (i % 2 ? 0.82 : 1.0); ctx.lineTo(midX + widthAt(t) * bump, yAt(t)); }
+    for (let i = N; i >= 0; i--) { const t = i / N; const bump = (i % 2 ? 0.82 : 1.0); ctx.lineTo(midX - widthAt(t) * bump, yAt(t)); }
+    ctx.closePath();
+    ctx.fillStyle = 'hsla(108,42%,30%,1)'; ctx.fill();          // solid green blade
+    // Midrib + a few veins for depth.
+    ctx.strokeStyle = 'hsla(100,38%,22%,0.9)'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(midX, yAt(0)); ctx.lineTo(midX, yAt(1)); ctx.stroke();
+    ctx.lineWidth = 1.5;
+    for (let i = 1; i < N; i++) {
+      const t = i / N, y = yAt(t), len = widthAt(t) * 0.8;
+      ctx.strokeStyle = `hsla(104,40%,${20 + Math.random() * 10}%,0.7)`;
+      [-1, 1].forEach((sd) => { ctx.beginPath(); ctx.moveTo(midX, y); ctx.lineTo(midX + sd * len, y - 8); ctx.stroke(); });
     }
     const tex = new THREE.CanvasTexture(c);
     tex.colorSpace = THREE.SRGBColorSpace;
@@ -376,11 +376,15 @@ export function createVeyraWorld(container, opts) {
   }
 
   // Build the alpha-leaf-card material for a species (shared sway shader + alphaTest).
+  // FULLY MATTE: roughness 1 + envMapIntensity 0 so the flat cards don't mirror the
+  // sky IBL — that sheen is what read as a glassy / glass-pane look on the foliage.
   function makeLeafMaterial(tex) {
     const mat = new THREE.MeshStandardMaterial({
-      map: tex, color: 0xffffff, roughness: 0.92, metalness: 0,
-      alphaTest: 0.42, side: THREE.DoubleSide,   // alphaTest (not transparent) → no sort issues
+      map: tex, color: 0xffffff, roughness: 1.0, metalness: 0,
+      alphaTest: 0.5, side: THREE.DoubleSide,    // alphaTest (not transparent) → no sort issues
+      transparent: false, depthWrite: true,
     });
+    mat.envMapIntensity = 0;                      // kill the sky reflection (no glass sheen)
     localMats.push(mat);
     mat.onBeforeCompile = (shader) => {
       shader.uniforms.uTime = swayUniforms.uTime;
@@ -565,6 +569,9 @@ export function createVeyraWorld(container, opts) {
   let lastSitSig = '';               // change-detector for opts.onSit
   const SEAT_Y = 0.46;               // avatar lift when sitting on a bench
   const SIT_REACH = 2.2;             // how close to a seat to offer "sit"
+  // Chat: floating speech bubbles above heads (local + remote), auto-fading.
+  const bubbles = new Map();         // id -> { sprite, group, until }
+  const BUBBLE_MS = 6000;
 
   // Tree foliage wind-sway uniforms (bound in build() onBeforeCompile).
   const swayUniforms = { uTime: { value: 0 }, uWind: { value: 0 }, uWindDir: { value: 0 } };
@@ -821,7 +828,31 @@ export function createVeyraWorld(container, opts) {
     const roofTileGeoms = [];                              // pitched hip roofs (one merged mesh)
     const pitchedSet = new Set();                          // polys given a pitched roof (skip flat detail)
 
+    // Reserve enterable-landmark footprints on the lake promenade (facing the
+    // lake) so the OSM footprints below can be cleared from those spots — otherwise
+    // the landmark boxes would intersect real buildings. Each site's facade sits
+    // just outside the promenade ring; the body extends back (−local z).
+    landmarkSites = [
+      { key: 'cathedral', ang: -Math.PI / 2, W: 11, D: 13, H: 8 },   // west
+      { key: 'opera', ang: Math.PI / 4, W: 16, D: 12, H: 8 },        // south-east
+      { key: 'post', ang: -Math.PI / 4, W: 14, D: 11, H: 7 },        // south-west
+    ].map((s) => {
+      const setback = 7;
+      const fx = lakeCx + Math.sin(s.ang) * (lakeR + setback);
+      const fz = lakeCz + Math.cos(s.ang) * (lakeR + setback);
+      const yaw = Math.atan2(lakeCx - fx, lakeCz - fz);              // local +z faces the lake
+      const cx = fx - Math.sin(yaw) * (s.D / 2), cz = fz - Math.cos(yaw) * (s.D / 2);
+      return { ...s, fx, fz, yaw, cx, cz, clearR: Math.hypot(s.W, s.D) / 2 + 4 };
+    });
+
     let buildList = (data && data.buildings) ? data.buildings : [];
+    // Drop any OSM building whose centroid falls inside a reserved landmark plot.
+    buildList = buildList.filter((b) => {
+      if (!b.poly || b.poly.length < 3) return true;
+      let x = 0, z = 0; for (const p of b.poly) { x += p[0]; z += p[1]; }
+      x /= b.poly.length; z /= b.poly.length;
+      return !landmarkSites.some((s) => Math.hypot(x - s.cx, z - s.cz) < s.clearR);
+    });
     // LOW tier: cap to the ~350 buildings nearest the lake centre (keep the core).
     if (q.tier === 'low' && buildList.length > 350) {
       buildList = buildList
@@ -1330,6 +1361,7 @@ export function createVeyraWorld(container, opts) {
   const fenceGates = [];   // { key, label, a, x, z, hue } — used by later phases
   const shopDoors = [];    // { x, z, leaves, openT } — entrance doors that auto-open on approach
   const landmarks = [];    // { ranges, openT, leaves, glowMats, lights, signOpen, signClosed, clock } — real-time public buildings
+  let landmarkSites = [];  // reserved enterable-landmark footprints (computed once the lake is known)
   function makeLabelTexture(text, hue) {
     const cv = document.createElement('canvas'); cv.width = 256; cv.height = 128;
     const cx = cv.getContext('2d');
@@ -1408,6 +1440,7 @@ export function createVeyraWorld(container, opts) {
   }
   function disposeRemote(id) {
     const r = remotePlayers.get(id); if (!r) return;
+    removeBubble(id);
     scene.remove(r.group);
     r.group.traverse((o) => { if (o.isMesh) { o.geometry && o.geometry.dispose && o.geometry.dispose(); } });
     if (r.av && r.av.mats) for (const k in r.av.mats) { const m = r.av.mats[k]; m && m.dispose && m.dispose(); }
@@ -1426,6 +1459,12 @@ export function createVeyraWorld(container, opts) {
       r.tx = s.x; r.tz = s.z; r.tRotY = s.rotY || 0;
       r.anim = s.anim || 'idle'; r.seatId = s.seatId || null;
       r.last = now;
+      // Chat arrives THROUGH the snapshot: show a bubble when this player's
+      // message is new and still fresh (skip stale ones a late joiner sees).
+      if (s.msg && s.msgAt && s.msgAt !== r.lastMsgAt && Date.now() - s.msgAt < BUBBLE_MS) {
+        r.lastMsgAt = s.msgAt;
+        say(s.id, s.msg);
+      }
     }
   }
   function playerLeft(id) { disposeRemote(id); }
@@ -1454,6 +1493,79 @@ export function createVeyraWorld(container, opts) {
         ez(r.parts.armL, -Math.sin(r.phase) * sw * 0.7); ez(r.parts.armR, Math.sin(r.phase) * sw * 0.7);
       }
       if (r.tag) r.tag.quaternion.copy(camera.quaternion);
+    }
+  }
+
+  // ── Chat bubbles ─────────────────────────────────────────────────────────
+  // A speech bubble drawn to a canvas sprite (sprites auto-billboard). Word-wraps
+  // to ≤2 lines; overflow truncated with an ellipsis.
+  function makeBubble(text) {
+    const cv = document.createElement('canvas'); cv.width = 320; cv.height = 96;
+    const cx = cv.getContext('2d');
+    cx.font = '600 26px system-ui, sans-serif'; cx.textBaseline = 'middle';
+    // Word-wrap into up to 2 lines that fit ~300px.
+    const words = String(text).split(' ');
+    const lines = []; let line = '';
+    for (const w of words) {
+      const test = line ? line + ' ' + w : w;
+      if (cx.measureText(test).width > 296 && line) { lines.push(line); line = w; if (lines.length === 2) break; }
+      else line = test;
+    }
+    if (lines.length < 2 && line) lines.push(line);
+    if (lines.length === 2 && cx.measureText(lines[1]).width > 296) {
+      while (lines[1].length > 1 && cx.measureText(lines[1] + '…').width > 296) lines[1] = lines[1].slice(0, -1);
+      lines[1] += '…';
+    }
+    const padX = 16, lineH = 32;
+    const tw = Math.min(300, Math.max(...lines.map((l) => cx.measureText(l).width)));
+    const bw = tw + padX * 2, bh = lines.length * lineH + 16;
+    const bx = (cv.width - bw) / 2, by = 6;
+    cx.fillStyle = 'rgba(245,250,252,0.96)';
+    roundRectPath(cx, bx, by, bw, bh, 14); cx.fill();
+    cx.fillStyle = '#15303a'; cx.textAlign = 'center';
+    lines.forEach((l, i) => cx.fillText(l, cv.width / 2, by + 16 + i * lineH));
+    const tex = new THREE.CanvasTexture(cv);
+    tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = q.anisotropy || 1;
+    ownedTextures.push(tex);
+    const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false, depthWrite: false });
+    localMats.push(mat);
+    const spr = new THREE.Sprite(mat); spr.scale.set(3.3, 3.3 * cv.height / cv.width, 1);
+    spr.renderOrder = 14;
+    return spr;
+  }
+  function roundRectPath(c, x, y, w, h, r) {
+    c.beginPath();
+    c.moveTo(x + r, y); c.arcTo(x + w, y, x + w, y + h, r); c.arcTo(x + w, y + h, x, y + h, r);
+    c.arcTo(x, y + h, x, y, r); c.arcTo(x, y, x + w, y, r); c.closePath();
+  }
+  // Attach/replace a chat bubble above the target avatar (local or remote).
+  function say(id, text) {
+    if (!text) return;
+    const targetGroup = (SELF_ID && id === SELF_ID)
+      ? (player && player.group)
+      : (remotePlayers.get(id) && remotePlayers.get(id).group);
+    if (!targetGroup) return;
+    const prev = bubbles.get(id);
+    if (prev) { prev.group.remove(prev.sprite); }
+    const sprite = makeBubble(text);
+    sprite.position.set(0, 2.95, 0);
+    targetGroup.add(sprite);
+    bubbles.set(id, { sprite, group: targetGroup, until: performance.now() + BUBBLE_MS });
+  }
+  function removeBubble(id) {
+    const b = bubbles.get(id); if (!b) return;
+    b.group.remove(b.sprite);
+    if (b.sprite.material && b.sprite.material.map) b.sprite.material.map.dispose();
+    if (b.sprite.material) b.sprite.material.dispose();
+    bubbles.delete(id);
+  }
+  // Per-frame: fade each bubble in its final ~0.8s, then remove.
+  function updateBubbles() {
+    const now = performance.now();
+    for (const [id, b] of bubbles) {
+      const left = b.until - now;
+      if (left <= 0) { removeBubble(id); continue; }
+      b.sprite.material.opacity = left < 800 ? Math.max(0, left / 800) : 1;
     }
   }
 
@@ -1758,17 +1870,30 @@ export function createVeyraWorld(container, opts) {
     [so, sc].forEach((s) => { s.position.set(lx, ly, lz); parent.add(s); });
     return { signOpen: so, signClosed: sc };
   }
+  // Brass door furniture (handles / panel trim), shared.
+  const doorBrass = new THREE.MeshStandardMaterial({ color: hsl(45, 0.5, 0.5), roughness: 0.4, metalness: 0.7 });
+  localMats.push(doorBrass);
   // Two hinged leaves filling an opening width `w`/height `h`, centred at local
-  // (cx,0,cz) on a +z-facing wall of `parent`. Leaves swing outward to +z when open.
+  // (cx,0,cz) on a +z-facing wall of `parent`. Leaves swing outward to +z when
+  // open. Each leaf gets recessed panels + a brass handle for a real door read.
   function addDoubleDoor(parent, cx, cz, w, h, leafMat) {
     const half = w / 2, leafW = half - 0.04, hY = h / 2;
     const out = [];
     for (const sgn of [-1, 1]) {
       const hinge = new THREE.Group();
       hinge.position.set(cx + sgn * half, 0, cz);
+      const lcx = -sgn * leafW / 2;                        // leaf centre (extends to mid)
       const leaf = new THREE.Mesh(new THREE.BoxGeometry(leafW, h, 0.1), leafMat);
-      leaf.position.set(-sgn * leafW / 2, hY, 0); leaf.castShadow = true; hinge.add(leaf);
-      ownedGeoms.push(leaf.geometry); parent.add(hinge);
+      leaf.position.set(lcx, hY, 0); leaf.castShadow = true; hinge.add(leaf); ownedGeoms.push(leaf.geometry);
+      for (const py of [h * 0.3, h * 0.66]) {              // two recessed panels per leaf
+        const trim = new THREE.Mesh(new THREE.BoxGeometry(leafW * 0.66, h * 0.26, 0.04), doorBrass);
+        trim.position.set(lcx, py, 0.06); hinge.add(trim); ownedGeoms.push(trim.geometry);
+        const panel = new THREE.Mesh(new THREE.BoxGeometry(leafW * 0.56, h * 0.2, 0.05), leafMat);
+        panel.position.set(lcx, py, 0.08); hinge.add(panel); ownedGeoms.push(panel.geometry);
+      }
+      const handle = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.36, 0.06), doorBrass);
+      handle.position.set(-sgn * (leafW - 0.16), hY, 0.13); hinge.add(handle); ownedGeoms.push(handle.geometry);
+      parent.add(hinge);
       out.push({ grp: hinge, openYaw: sgn * Math.PI / 2 });   // left −90°, right +90°
     }
     return out;
@@ -1788,138 +1913,158 @@ export function createVeyraWorld(container, opts) {
   // ── Iconic Hanoi public buildings that open/close with real Hanoi time ──────
   // Higher-detail than the stone monuments; placed on the promenade ring facing
   // the lake (avoids the OSM footprints inland). Visual open state only.
-  function buildPublicLandmarks(lakeCx, lakeCz, northZ, lakeR) {
+  function buildPublicLandmarks() {
+    if (!landmarkSites.length) return;
     const withLight = q.tier !== 'low';
-    // Shared local palette.
+    // Palette.
     const granite = new THREE.MeshStandardMaterial({ color: hsl(40, 0.04, 0.6), roughness: 0.92, metalness: 0 });
     const white = new THREE.MeshStandardMaterial({ color: hsl(42, 0.06, 0.84), roughness: 0.85, metalness: 0 });
     const slate = new THREE.MeshStandardMaterial({ color: hsl(220, 0.05, 0.32), roughness: 0.8, metalness: 0.05 });
     const gilt = new THREE.MeshStandardMaterial({ color: hsl(45, 0.6, 0.55), roughness: 0.4, metalness: 0.7 });
-    const yellow = mats.plaster(46);          // ochre French-colonial facade (cached/shared)
+    const carpet = new THREE.MeshStandardMaterial({ color: hsl(2, 0.5, 0.28), roughness: 0.95, metalness: 0 });
+    const yellow = mats.plaster(46);
     const paleY = mats.plaster(42);
-    localMats.push(granite, white, slate, gilt);
+    localMats.push(granite, white, slate, gilt, carpet);
 
     const bx = (parent, mat, w, h, d, x, y, z) => {
       const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
       m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true; parent.add(m);
       ownedGeoms.push(m.geometry); return m;
     };
-    const placeFacingLake = (x, z) => {
-      const g = new THREE.Group(); g.position.set(x, 0, z);
-      g.rotation.y = Math.atan2(lakeCx - x, lakeCz - z);   // local +z faces the lake
-      scene.add(g); return g;
+    // Local→world for a yaw-only group.
+    const wpt = (g, lx, lz) => {
+      const a = g.rotation.y, s = Math.sin(a), c = Math.cos(a);
+      return [g.position.x + lx * c + lz * s, g.position.z - lx * s + lz * c];
     };
-    // Collision circle centred on the building BODY, which extends along local −z
-    // (away from the lake-facing doors). Rotate the offset by the group yaw so the
-    // blocker tracks the body regardless of facing, leaving the +z doors clear.
-    const pushBodyBlocker = (g, dist, r) => {
-      const a = g.rotation.y;
-      circles.push({ x: g.position.x - Math.sin(a) * dist, z: g.position.z - Math.cos(a) * dist, r });
-    };
-    const warmLight = (g, y, dist) => {
-      if (!withLight) return [];
-      const pl = new THREE.PointLight(0xffd9a0, 0, dist, 2.0);
-      pl.position.set(0, y, 0.5); pl.userData.baseInt = 14; g.add(pl); return [pl];
-    };
+    const wrect = (g, cx, cz, w, d) =>
+      [[cx - w / 2, cz - d / 2], [cx + w / 2, cz - d / 2], [cx + w / 2, cz + d / 2], [cx - w / 2, cz + d / 2]].map(([lx, lz]) => wpt(g, lx, lz));
+    const site = (k) => landmarkSites.find((s) => s.key === k);
 
-    // ── ĐỀN — already built; here the THREE NEW French/Gothic landmarks. ──
+    // Generic ENTERABLE shell: solid walls (footprint-polygon collision) with a
+    // door GAP, an OPEN TOP (so the third-person camera can look in), a floor, a
+    // perimeter parapet, glowing windows, an interior light, a status sign, a
+    // plaza, and time-gated doors whose collision blocks ONLY while shut (so you
+    // can walk in during opening hours and are blocked otherwise).
+    function enterableShell(S, o) {
+      const { W, D, H } = S, halfW = W / 2, halfD = D / 2, tw = 0.5;
+      const doorW = o.doorW || 3.0, doorH = o.doorH || 4.2;
+      const g = new THREE.Group(); g.position.set(S.cx, 0, S.cz); g.rotation.y = S.yaw; scene.add(g);
+      bx(g, o.floorMat, W, 0.12, D, 0, 0.0, 0);                                       // floor (flush)
+      bx(g, o.wallMat, W, H, tw, 0, H / 2, -halfD + tw / 2);                          // back wall
+      bx(g, o.wallMat, tw, H, D, -halfW + tw / 2, H / 2, 0);                          // left wall
+      bx(g, o.wallMat, tw, H, D, halfW - tw / 2, H / 2, 0);                           // right wall
+      const side = (W - doorW) / 2;
+      bx(g, o.wallMat, side, H, tw, -(doorW / 2 + side / 2), H / 2, halfD - tw / 2);  // front-left
+      bx(g, o.wallMat, side, H, tw, doorW / 2 + side / 2, H / 2, halfD - tw / 2);     // front-right
+      bx(g, o.wallMat, doorW, H - doorH, tw, 0, doorH + (H - doorH) / 2, halfD - tw / 2); // header
+      // Perimeter parapet rim (open top, so no roof to hide the camera).
+      const rimMat = o.rimMat || o.wallMat;
+      bx(g, rimMat, W + 0.4, 0.5, 0.5, 0, H + 0.25, -halfD + 0.25);
+      bx(g, rimMat, W + 0.4, 0.5, 0.5, 0, H + 0.25, halfD - 0.25);
+      bx(g, rimMat, 0.5, 0.5, D + 0.4, -halfW + 0.25, H + 0.25, 0);
+      bx(g, rimMat, 0.5, 0.5, D + 0.4, halfW - 0.25, H + 0.25, 0);
+      // Wall collision (footprint polygons).
+      addBldgCollision(wrect(g, 0, -halfD + tw / 2, W, tw));
+      addBldgCollision(wrect(g, -halfW + tw / 2, 0, tw, D));
+      addBldgCollision(wrect(g, halfW - tw / 2, 0, tw, D));
+      addBldgCollision(wrect(g, -(doorW / 2 + side / 2), halfD - tw / 2, side, tw));
+      addBldgCollision(wrect(g, doorW / 2 + side / 2, halfD - tw / 2, side, tw));
+      // Glowing windows on the side walls + an interior light.
+      const gw = glowMat(o.glowHue, o.glowE || 1.3);
+      const n = Math.max(2, Math.round((D - 3) / 3));
+      for (let i = 0; i < n; i++) {
+        const z = -halfD + 2.2 + (i * (D - 4.4)) / Math.max(1, n - 1);
+        bx(g, gw, 0.06, 2.0, 1.1, -halfW + 0.34, 2.7, z);
+        bx(g, gw, 0.06, 2.0, 1.1, halfW - 0.34, 2.7, z);
+      }
+      const lights = [];
+      if (withLight) {
+        const pl = new THREE.PointLight(0xffe6c0, 0, Math.max(W, D) * 1.7, 2.0);
+        pl.position.set(0, H - 1.0, -halfD * 0.2); pl.userData.baseInt = 18; g.add(pl); lights.push(pl);
+      }
+      const leaves = addDoubleDoor(g, 0, halfD - 0.02, doorW, doorH, o.doorMat || darkWood);
+      const sg = statusSigns(g, doorW / 2 + 1.5, 2.6, halfD + 0.25);
+      const plaza = new THREE.Mesh(new THREE.CylinderGeometry(W * 0.62, W * 0.62, 0.16, 28), mats.paving);
+      plaza.position.set(0, 0.07, halfD + W * 0.26); plaza.receiveShadow = true; g.add(plaza); ownedGeoms.push(plaza.geometry);
+      const handle = { ranges: o.ranges, leaves, glowMats: [gw], lights, signOpen: sg.signOpen, signClosed: sg.signClosed, clock: null };
+      // Door-gap collision: blocks while shut, skipped once the doors are open.
+      for (let i = -1; i <= 1; i++) {
+        const p = wpt(g, i * (doorW / 2 - 0.45), halfD - tw / 2);
+        circles.push({ x: p[0], z: p[1], r: 0.85, lm: handle });
+      }
+      return { g, handle, gw, halfW, halfD };
+    }
 
-    // 1) NHÀ THỜ LỚN — neo-Gothic cathedral, twin square bell towers (WEST shore).
+    // 1) NHÀ THỜ LỚN — neo-Gothic cathedral, twin bell towers (open-top nave).
     (function cathedral() {
-      const g = placeFacingLake(lakeCx - (lakeR + 24), lakeCz - 4);
-      const naveW = 9, naveH = 11, naveD = 16;
-      bx(g, granite, naveW, naveH, naveD, 0, naveH / 2, -naveD / 2 - 1);   // nave
-      // Gable + steep roof.
-      bx(g, slate, naveW + 0.4, 0.5, naveD, 0, naveH + 0.2, -naveD / 2 - 1);
-      const gw = glowMat(40, 1.6);                                          // shared window glow
-      // Rose window (glowing disc on the facade).
-      const rose = new THREE.Mesh(new THREE.CircleGeometry(1.5, 24), gw);
-      rose.position.set(0, naveH - 2.2, 0.06); g.add(rose); ownedGeoms.push(rose.geometry);
+      const S = site('cathedral'); if (!S) return;
+      const r = enterableShell(S, { wallMat: granite, floorMat: mats.paving, rimMat: granite, glowHue: 40, glowE: 1.6, doorMat: darkWood, doorW: 3.0, doorH: 4.4, ranges: [[8, 20]] });
+      const { g, handle, gw, halfW, halfD } = r;
+      // Rose window on the facade above the door.
+      const rose = new THREE.Mesh(new THREE.CircleGeometry(1.3, 24), gw);
+      rose.position.set(0, S.H - 1.5, halfD + 0.03); g.add(rose); ownedGeoms.push(rose.geometry);
       // Twin square bell towers flanking the facade.
-      const towerH = 16, tw = 3.2;
+      const towerH = S.H + 8, tw = 3.0;
       for (const sgn of [-1, 1]) {
-        const tx = sgn * (naveW / 2 + tw / 2 - 0.2);
-        bx(g, granite, tw, towerH, tw, tx, towerH / 2, 0.2);
-        // Belfry louvre (glowing) + a stepped cap + a spirelet.
-        bx(g, gw, tw * 0.5, 2.2, tw * 0.5, tx, towerH - 3.2, tw / 2 + 0.18);
-        bx(g, white, tw + 0.5, 0.5, tw + 0.5, tx, towerH + 0.25, 0.2);
-        const spire = new THREE.Mesh(new THREE.ConeGeometry(tw * 0.62, 3.2, 4), slate);
-        spire.position.set(tx, towerH + 1.9, 0.2); spire.rotation.y = Math.PI / 4; spire.castShadow = true; g.add(spire); ownedGeoms.push(spire.geometry);
-        const cross = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.0, 0.12), gilt);
-        cross.position.set(tx, towerH + 3.9, 0.2); g.add(cross); ownedGeoms.push(cross.geometry);
-        bx(g, gilt, 0.6, 0.12, 0.12, tx, towerH + 3.95, 0.2);
+        const tx = sgn * (halfW - tw / 2 + 0.3);
+        bx(g, granite, tw, towerH, tw, tx, towerH / 2, halfD - tw / 2);
+        bx(g, gw, tw * 0.5, 2.0, 0.12, tx, towerH - 3, halfD - tw / 2 + 0.26);   // belfry glow
+        bx(g, granite, tw + 0.5, 0.5, tw + 0.5, tx, towerH + 0.25, halfD - tw / 2);
+        const spire = new THREE.Mesh(new THREE.ConeGeometry(tw * 0.6, 3.4, 4), slate);
+        spire.position.set(tx, towerH + 2.0, halfD - tw / 2); spire.rotation.y = Math.PI / 4; spire.castShadow = true; g.add(spire); ownedGeoms.push(spire.geometry);
+        bx(g, gilt, 0.12, 1.0, 0.12, tx, towerH + 4.1, halfD - tw / 2);          // cross (vertical)
+        bx(g, gilt, 0.6, 0.12, 0.12, tx, towerH + 4.15, halfD - tw / 2);         // cross (arms)
       }
-      // Lancet windows down the nave sides (glowing).
+      // Interior: pews + an altar at the back.
       for (let i = 0; i < 4; i++) {
-        const z = -3 - i * 3;
-        for (const sgn of [-1, 1]) bx(g, gw, 0.1, 3.2, 0.9, sgn * (naveW / 2 + 0.02), 4.2, z);
+        const z = -halfD + 3 + i * 2.2;
+        for (const sgn of [-1, 1]) bx(g, darkWood, S.W * 0.3, 0.5, 0.5, sgn * S.W * 0.22, 0.7, z);
       }
-      // Pointed-arch portal + double doors.
-      bx(g, white, 3.4, 0.4, 0.3, 0, 4.6, 0.18);
-      const arch = new THREE.Mesh(new THREE.ConeGeometry(1.7, 1.6, 3), white);
-      arch.position.set(0, 5.4, 0.18); arch.rotation.y = Math.PI / 2; g.add(arch); ownedGeoms.push(arch.geometry);
-      const leaves = addDoubleDoor(g, 0, 0.12, 2.8, 4.4, darkWood);
-      const lights = warmLight(g, 5, 26);
-      const sg = statusSigns(g, naveW / 2 + 1.4, 2.6, 0.6);
-      pushBodyBlocker(g, 8, 9);
-      registerLandmark({ ranges: [[8, 20]], leaves, glowMats: [gw], lights, ...sg });
+      bx(g, white, 2.4, 1.0, 1.0, 0, 0.6, -halfD + 1.6);   // altar
+      bx(g, gilt, 0.16, 1.4, 0.16, 0, 1.7, -halfD + 1.6);  // cross on altar
+      registerLandmark(handle);
     })();
 
-    // 2) NHÀ HÁT LỚN — Opera House: yellow facade, Ionic portico, central dome (SE).
+    // 2) NHÀ HÁT LỚN — Opera House: yellow body, Ionic portico, rear dome (open top).
     (function opera() {
-      const off = (lakeR + 22) * 0.72;
-      const g = placeFacingLake(lakeCx + off, lakeCz + off);
-      const bodyW = 16, bodyH = 10, bodyD = 13;
-      bx(g, yellow, bodyW, bodyH, bodyD, 0, bodyH / 2, -bodyD / 2 - 1.4);
-      // Grey mansard cap.
-      bx(g, slate, bodyW + 0.6, 1.6, bodyD + 0.4, 0, bodyH + 0.8, -bodyD / 2 - 1.4);
-      // Central dome on a drum.
-      const drum = new THREE.Mesh(new THREE.CylinderGeometry(3, 3.3, 1.8, 20), white);
-      drum.position.set(0, bodyH + 1.7, -bodyD / 2 - 1.4); drum.castShadow = true; g.add(drum); ownedGeoms.push(drum.geometry);
-      const dome = new THREE.Mesh(new THREE.SphereGeometry(3, 20, 12, 0, Math.PI * 2, 0, Math.PI / 2), slate);
-      dome.position.set(0, bodyH + 2.6, -bodyD / 2 - 1.4); dome.castShadow = true; g.add(dome); ownedGeoms.push(dome.geometry);
-      const lantern = new THREE.Mesh(new THREE.ConeGeometry(0.6, 1.4, 8), gilt);
-      lantern.position.set(0, bodyH + 6.0, -bodyD / 2 - 1.4); g.add(lantern); ownedGeoms.push(lantern.geometry);
-      // Portico: 6 Ionic columns + entablature + pediment.
-      const colY = 7, nCol = 6;
-      for (let i = 0; i < nCol; i++) {
-        const cx = -6 + (12 * i) / (nCol - 1);
+      const S = site('opera'); if (!S) return;
+      const r = enterableShell(S, { wallMat: yellow, floorMat: carpet, rimMat: white, glowHue: 45, glowE: 1.4, doorMat: darkWood, doorW: 3.4, doorH: 4.6, ranges: [[10.5, 12], [18, 22]] });
+      const { g, handle, halfW, halfD } = r;
+      // Rear dome on a drum (over the back wall, not the open play area).
+      const drum = new THREE.Mesh(new THREE.CylinderGeometry(2.6, 2.9, 1.6, 20), white);
+      drum.position.set(0, S.H + 1.6, -halfD + 1.4); drum.castShadow = true; g.add(drum); ownedGeoms.push(drum.geometry);
+      const dome = new THREE.Mesh(new THREE.SphereGeometry(2.6, 20, 12, 0, Math.PI * 2, 0, Math.PI / 2), slate);
+      dome.position.set(0, S.H + 2.4, -halfD + 1.4); dome.castShadow = true; g.add(dome); ownedGeoms.push(dome.geometry);
+      const lantern = new THREE.Mesh(new THREE.ConeGeometry(0.55, 1.3, 8), gilt);
+      lantern.position.set(0, S.H + 5.2, -halfD + 1.4); g.add(lantern); ownedGeoms.push(lantern.geometry);
+      // Portico in FRONT of the facade (lake side); columns avoid the doorway.
+      const span = S.W * 0.86, colY = S.H * 0.74, pz = halfD + 1.7;
+      for (const i of [-3, -2, -1, 1, 2, 3]) {
+        const cx = (i * span) / 6;
         const col = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.46, colY, 14), white);
-        col.position.set(cx, colY / 2, 1.4); col.castShadow = true; g.add(col); ownedGeoms.push(col.geometry);
-        bx(g, white, 1.1, 0.4, 0.6, cx, colY + 0.2, 1.4);    // capital
+        col.position.set(cx, colY / 2, pz); col.castShadow = true; g.add(col); ownedGeoms.push(col.geometry);
+        bx(g, white, 1.0, 0.4, 0.6, cx, colY + 0.2, pz);   // capital
       }
-      bx(g, white, 13, 0.9, 1.0, 0, colY + 0.8, 1.4);          // entablature
-      const ped = new THREE.Mesh(new THREE.ConeGeometry(7, 1.6, 3), white);
-      ped.rotation.y = Math.PI / 2; ped.position.set(0, colY + 2.1, 1.2); g.add(ped); ownedGeoms.push(ped.geometry);
-      bx(g, white, 13, 0.18, 1.4, 0, colY + 1.0, 1.4);         // balcony slab over portico
-      // Arched glowing windows across the facade upper storey.
-      const gw = glowMat(45, 1.4);
-      for (let i = 0; i < 5; i++) {
-        const cx = -6 + (12 * i) / 4;
-        bx(g, gw, 1.2, 2.0, 0.1, cx, 6.6, 0.02);
-      }
-      // Grand doors behind the portico.
-      const leaves = addDoubleDoor(g, 0, 0.12, 3.0, 4.6, darkWood);
-      const lights = warmLight(g, 5, 30);
-      const sg = statusSigns(g, bodyW / 2 - 0.6, 2.6, 1.6);
-      pushBodyBlocker(g, 7, 10);
-      // Tours 10:30–12:00 + evening performances 18:00–22:00.
-      registerLandmark({ ranges: [[10.5, 12], [18, 22]], leaves, glowMats: [gw], lights, ...sg });
+      bx(g, white, span + 0.8, 0.9, 1.0, 0, colY + 0.8, pz);     // entablature
+      const ped = new THREE.Mesh(new THREE.ConeGeometry(span / 2 + 0.4, 1.5, 3), white);
+      ped.rotation.y = Math.PI / 2; ped.position.set(0, colY + 2.05, pz - 0.1); g.add(ped); ownedGeoms.push(ped.geometry);
+      // Interior: rows of seats + a stage at the back.
+      for (let i = 0; i < 4; i++) bx(g, carpet, S.W * 0.7, 0.5, 0.6, 0, 0.7, -halfD + 3.2 + i * 1.7);
+      bx(g, darkWood, S.W * 0.8, 1.2, 1.4, 0, 0.6, -halfD + 1.6);   // stage
+      registerLandmark(handle);
     })();
 
-    // 3) BƯU ĐIỆN BỜ HỒ — Post Office with a live real-time clock tower (EAST shore).
+    // 3) BƯU ĐIỆN BỜ HỒ — Post Office, live real-time clock tower (open top).
     (function postOffice() {
-      const g = placeFacingLake(lakeCx + (lakeR + 18), lakeCz - lakeR * 0.5);
-      const bodyW = 15, bodyH = 8, bodyD = 10;
-      bx(g, paleY, bodyW, bodyH, bodyD, 0, bodyH / 2, -bodyD / 2 - 1.2);
-      bx(g, redPaint, bodyW + 0.6, 0.5, bodyD + 0.4, 0, bodyH + 0.2, -bodyD / 2 - 1.2);   // red-tile cornice
-      // Central clock tower.
-      const twW = 4.2, twH = 7, twBaseY = bodyH;
-      bx(g, paleY, twW, twH, twW, 0, twBaseY + twH / 2, -0.6);
-      const towerRoof = new THREE.Mesh(new THREE.ConeGeometry(twW * 0.78, 2.6, 4), redPaint);
-      towerRoof.rotation.y = Math.PI / 4; towerRoof.position.set(0, twBaseY + twH + 1.1, -0.6); towerRoof.castShadow = true; g.add(towerRoof); ownedGeoms.push(towerRoof.geometry);
-      // Clock face + two hands (driven by real Hanoi time in the frame loop).
-      const faceZ = twW / 2 - 0.6 + 0.06, faceY = twBaseY + twH * 0.6;
+      const S = site('post'); if (!S) return;
+      const r = enterableShell(S, { wallMat: paleY, floorMat: mats.paving, rimMat: redPaint, glowHue: 45, glowE: 1.3, doorMat: darkWood, doorW: 3.2, doorH: 4.0, ranges: [[7.5, 21]] });
+      const { g, handle, halfD } = r;
+      // Clock tower toward the facade (above the front wall, clear of the open top).
+      const twW = 4.0, twH = 6, twBaseY = S.H + 0.4, twZ = halfD - 2;
+      bx(g, paleY, twW, twH, twW, 0, twBaseY + twH / 2, twZ);
+      const towerRoof = new THREE.Mesh(new THREE.ConeGeometry(twW * 0.78, 2.4, 4), redPaint);
+      towerRoof.rotation.y = Math.PI / 4; towerRoof.position.set(0, twBaseY + twH + 1.0, twZ); towerRoof.castShadow = true; g.add(towerRoof); ownedGeoms.push(towerRoof.geometry);
+      const faceZ = twZ + twW / 2 + 0.06, faceY = twBaseY + twH * 0.55;
       const face = new THREE.Mesh(new THREE.CircleGeometry(1.3, 28), white);
       face.position.set(0, faceY, faceZ); g.add(face); ownedGeoms.push(face.geometry);
       const ring = new THREE.Mesh(new THREE.TorusGeometry(1.3, 0.1, 8, 28), gilt);
@@ -1930,20 +2075,13 @@ export function createVeyraWorld(container, opts) {
         hand.position.set(0, len / 2 - 0.1, 0); pivot.add(hand); ownedGeoms.push(hand.geometry);
         g.add(pivot); return pivot;
       };
-      const clock = { hour: mkHand(0.75, 0.1), minute: mkHand(1.1, 0.07) };
-      // Arched glowing windows (ground storey).
-      const gw = glowMat(45, 1.3);
-      for (let i = 0; i < 6; i++) {
-        const cx = -6 + (12 * i) / 5;
-        bx(g, gw, 1.1, 1.8, 0.1, cx, 3.0, 0.02);
-      }
+      handle.clock = { hour: mkHand(0.75, 0.1), minute: mkHand(1.1, 0.07) };
       const nameSign = mats.makeSign('BƯU ĐIỆN HÀ NỘI', { width: 6.0, bg: '#143e6e' });
-      nameSign.position.set(0, bodyH - 1.0, 0.1); g.add(nameSign);
-      const leaves = addDoubleDoor(g, 0, 0.12, 3.0, 4.0, darkWood);
-      const lights = warmLight(g, 4, 28);
-      const sg = statusSigns(g, bodyW / 2 - 0.6, 2.6, 0.6);
-      pushBodyBlocker(g, 6, 9);
-      registerLandmark({ ranges: [[7.5, 21]], leaves, glowMats: [gw], lights, clock, ...sg });
+      nameSign.position.set(0, S.H - 0.8, halfD + 0.03); g.add(nameSign);
+      // Interior: a service counter + a waiting bench.
+      bx(g, darkWood, S.W * 0.7, 1.1, 1.0, 0, 0.55, -halfD + 1.5);
+      bx(g, mats.paving, S.W * 0.5, 0.45, 0.5, 0, 0.28, 1.0);
+      registerLandmark(handle);
     })();
   }
 
@@ -2114,9 +2252,10 @@ export function createVeyraWorld(container, opts) {
       }
       tieredRoof(bodyW, bodyD, bodyH, 1.6);
       tieredRoof(bodyW * 0.7, bodyD * 0.7, bodyH + 1.7, 1.4);
-      // Only the temple BODY blocks now; the island deck is walkable (the player
-      // arrives over the bridge). Smaller blocker so they can step onto the island.
-      circles.push({ x: ox, z: islandZ + 1.5, r: 2.8 });
+      // Solid temple body: accurate footprint-polygon collision (no walk-through),
+      // leaving the island deck walkable. The body centre is world (ox, islandZ+1.5).
+      const tcx = ox, tcz = islandZ + 1.5, hw = bodyW / 2, hd = bodyD / 2;
+      addBldgCollision([[tcx - hw, tcz - hd], [tcx + hw, tcz - hd], [tcx + hw, tcz + hd], [tcx - hw, tcz + hd]]);
     })();
   }
 
@@ -2980,6 +3119,7 @@ export function createVeyraWorld(container, opts) {
           for (let n = 0; n < arr.length; n++) {
             const b = circles[arr[n]];
             if (b.gate && openGates[b.gate]) continue;   // this gate's ticket cleared — let them pass
+            if (b.lm && b.lm.openT > 0.5) continue;       // landmark door open (in opening hours) — walk in
             const dx = pp.x - b.x, dz = pp.z - b.z; const dd = Math.hypot(dx, dz) || 1;
             if (dd < b.r + rad) { pp.x = b.x + dx / dd * (b.r + rad); pp.z = b.z + dz / dd * (b.r + rad); }
           }
@@ -3319,6 +3459,7 @@ export function createVeyraWorld(container, opts) {
 
     // ── Multiplayer: interpolate remote avatars + report the local transform ──
     updateRemotes(dt, t);
+    updateBubbles();
     {
       const anim = sitting ? 'sit' : (moving ? 'walk' : 'idle');
       opts.onLocalState && opts.onLocalState({
@@ -3416,6 +3557,9 @@ export function createVeyraWorld(container, opts) {
     // Sit controls (driven by the sit prompt button in WorldScreen).
     sit() { requestSit(); },
     stand() { requestStand(); },
+    // Chat: show the local player's own bubble immediately (optimistic); remote
+    // bubbles arrive via the presence snapshot.
+    say(text) { if (SELF_ID) say(SELF_ID, text); },
     dispose() {
       disposed = true;
       running = false; cancelAnimationFrame(raf);
