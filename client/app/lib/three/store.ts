@@ -411,6 +411,11 @@ export function createVeyraStore(container, opts) {
   function goToFloor(n) {
     if (!elevator || elevator.state !== 'idle') return false;
     if (n < 0 || n >= FLOORS || n === elevator.curFloor) return false;
+    // Must be near the shaft (the on-screen panel is proximity-gated; this also
+    // stops a 3D button being raycast-pressed from across the room, which would
+    // yank the player to the pad through fixtures).
+    const dE = Math.hypot(player.group.position.x - elevator.ex, player.group.position.z - elevator.ez);
+    if (dE > elevator.trig + 2) return false;
     elevator.fromY = baseY(elevator.curFloor);
     elevator.toY = baseY(n);
     elevator.nextFloor = n;
@@ -636,7 +641,11 @@ export function createVeyraStore(container, opts) {
   const ray = new THREE.Raycaster();
   const tapNDC = new THREE.Vector2();
   let tapStart = null;
-  const onTapDown = (e) => { tapStart = { x: e.clientX, y: e.clientY, id: e.pointerId, t: performance.now() }; };
+  const onTapDown = (e) => {
+    // A second concurrent pointer means this is a pinch/orbit gesture, not a tap.
+    if (tapStart) { tapStart = null; return; }
+    tapStart = { x: e.clientX, y: e.clientY, id: e.pointerId, t: performance.now() };
+  };
   const onTapUp = (e) => {
     const ts = tapStart; tapStart = null;
     if (!ts || ts.id !== e.pointerId || inspect.active || !liftButtons.length) return;
@@ -648,8 +657,10 @@ export function createVeyraStore(container, opts) {
     const hit = ray.intersectObjects(liftButtons.map((b) => b.mesh), false)[0];
     if (hit) { const b = liftButtons.find((x) => x.mesh === hit.object); if (b) goToFloor(b.floor); }
   };
+  const onTapCancel = () => { tapStart = null; };
   dom.addEventListener('pointerdown', onTapDown);
   dom.addEventListener('pointerup', onTapUp);
+  dom.addEventListener('pointercancel', onTapCancel);
 
   function enterInspect(id) {
     const entry = productById[id];
@@ -830,22 +841,33 @@ export function createVeyraStore(container, opts) {
     const cdX = Math.cos(cam.elev) * Math.sin(cam.yaw);
     const cdY = Math.sin(cam.elev);
     const cdZ = Math.cos(cam.elev) * Math.cos(cam.yaw);
+    // Orbit pivot, clamped STRICTLY inside the camera box so the slab tests are
+    // always valid — the player clamp lets pp.z reach RZ-0.4 (past the
+    // RZ-CAM_MARGIN plane) at the doorway, which would otherwise give a negative
+    // crossing and let the camera escape the front wall.
+    const camMinX = -RX + CAM_MARGIN, camMaxX = RX - CAM_MARGIN;
+    const camMinZ = -RZ + CAM_MARGIN, camMaxZ = RZ - CAM_MARGIN;
+    const ox = Math.min(camMaxX, Math.max(camMinX, pp.x));
+    const oz = Math.min(camMaxZ, Math.max(camMinZ, pp.z));
     let camDist = cam.dist;
-    // Lateral wall slabs (player x/z are already clamped inside, so the ray
-    // origin is interior). Take the nearest forward wall crossing.
     if (Math.abs(cdX) > 1e-4) {
-      const t = ((cdX > 0 ? RX - CAM_MARGIN : -RX + CAM_MARGIN) - pp.x) / cdX;
+      const t = ((cdX > 0 ? camMaxX : camMinX) - ox) / cdX;
       if (t >= 0) camDist = Math.min(camDist, t);
     }
     if (Math.abs(cdZ) > 1e-4) {
-      const t = ((cdZ > 0 ? RZ - CAM_MARGIN : -RZ + CAM_MARGIN) - pp.z) / cdZ;
+      const t = ((cdZ > 0 ? camMaxZ : camMinZ) - oz) / cdZ;
       if (t >= 0) camDist = Math.min(camDist, t);
     }
-    camDist = Math.max(2.0, camDist - 0.1);
-    followPos.set(pp.x + cdX * camDist, pp.y + cdY * camDist, pp.z + cdZ * camDist);
-    // Keep the camera below the current floor's ceiling.
+    // Ceiling cap (cdY > 0 always since minElev > 0, so the floor never clips).
     const ceilY = baseY(currentFloor) + wallH - 0.4;
-    if (followPos.y > ceilY) followPos.y = ceilY;
+    if (cdY > 1e-4) {
+      const t = (ceilY - pp.y) / cdY;
+      if (t >= 0) camDist = Math.min(camDist, t);
+    }
+    // Floor must stay BELOW the wall margin (0.6) so the camera never punches the
+    // real wall; it may come close to the player when jammed into a corner.
+    camDist = Math.max(0.5, camDist - 0.08);
+    followPos.set(ox + cdX * camDist, pp.y + cdY * camDist, oz + cdZ * camDist);
     followLook.set(pp.x * 0.6, pp.y + 1.4, pp.z * 0.6 - 0.5);
 
     if (inspecting && inspect.entry) {
@@ -948,9 +970,10 @@ export function createVeyraStore(container, opts) {
       dom.removeEventListener('wheel', spinWheel, true);
       dom.removeEventListener('pointerdown', onTapDown);
       dom.removeEventListener('pointerup', onTapUp);
+      dom.removeEventListener('pointercancel', onTapCancel);
       kbd.dispose(); stick.dispose(); orbitCam.dispose();
       post.dispose();
-      ownMats.forEach((m) => m.dispose());
+      ownMats.forEach((m) => { if (m.map) m.map.dispose(); m.dispose(); });
       envRT.dispose();
       pmrem.dispose();
       disposeScene(scene);
