@@ -43,6 +43,7 @@ import { createBuildings } from './shared/buildings';
 import { createStreetProps } from './shared/streetprops';
 import { createHanoiFacades } from './shared/hanoiFacades';
 import { createHanoiItems } from './shared/hanoiItems';
+import { createHanoiAmbience } from './shared/hanoiAmbience';
 
 export function createVeyraWorld(container, opts) {
   opts = opts || {};
@@ -63,6 +64,11 @@ export function createVeyraWorld(container, opts) {
   applyQualityToRenderer(renderer, q);
   renderer.setSize(W(), H());
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  // PERF: the city is static (merged buildings/roads); only the player (fake blob
+  // shadow) and a few NPCs move. Drive shadow-map re-bakes on a fixed ~30Hz cadence
+  // from the loop instead of every frame — see `shadowAccum` below.
+  renderer.shadowMap.autoUpdate = false;
+  renderer.shadowMap.needsUpdate = true;
   renderer.domElement.style.display = 'block';
   renderer.domElement.style.touchAction = 'none';
   container.appendChild(renderer.domElement);
@@ -119,6 +125,9 @@ export function createVeyraWorld(container, opts) {
   const density = q.propDensity;
   const facades = createHanoiFacades(THREE);
   const items = createHanoiItems(THREE);
+  // Atmospheric life on the lake (dawn mist, leaves, koi, fireflies). Self-contained
+  // module: owns its geom/mat/texture pools + the roots it adds; freed in dispose().
+  const ambience = createHanoiAmbience(THREE, { quality: q });
   const itemGroups = [];  // item root groups (geometry freed by items.dispose())
 
   // ── External CC0 assets (textures + GLB), all with procedural fallbacks ──
@@ -250,7 +259,7 @@ export function createVeyraWorld(container, opts) {
       waterNormals,
       sunDirection: new THREE.Vector3(0, 1, 0),
       sunColor: 0xffffff,
-      waterColor: new THREE.Color().setHSL(168 / 360, 0.45, 0.22).getHex(), // jade Hoan Kiem
+      waterColor: new THREE.Color().setHSL(146 / 360, 0.5, 0.19).getHex(), // "lục thủy" — the green Hoan Kiem water
       distortionScale: 2.4,
       fog: !!scene.fog,
       alpha: 0.95,
@@ -393,6 +402,10 @@ export function createVeyraWorld(container, opts) {
   const birdParams = [];       // per-bird orbit params
   const charMixers = [];       // AnimationMixers for the animated hero NPCs
   const charRoots = [];        // their root Object3Ds (cleaned up on dispose)
+  // Ambient people INSIDE the city (procedural crowd + animated hero NPCs) are
+  // disabled: they had no collision so the player walked straight through them.
+  // The perimeter/gate guards (liveGuards) are functional and stay.
+  const SHOW_CITY_NPCS = false;
   // Tree foliage wind-sway uniforms (bound in build() onBeforeCompile).
   const swayUniforms = { uTime: { value: 0 }, uWind: { value: 0 }, uWindDir: { value: 0 } };
 
@@ -400,7 +413,10 @@ export function createVeyraWorld(container, opts) {
   // Unauthenticated players spawn OUTSIDE the fence and must clear a gate's
   // ticket check to come in. `entered` flips true once they're inside the ring.
   let fenceR = 0;                              // perimeter fence radius (set in build)
-  let entered = !!opts.authed;                 // inside the fence? guests start outside
+  // Inside the fence? Signed-in players start inside; a guest who previously
+  // cleared a gate resumes inside too (the saved position carries an `entered`
+  // flag so a reload doesn't kick them back out to the gate).
+  let entered = !!opts.authed || !!(opts.startPos && opts.startPos.entered);
   const openGates = Object.create(null);       // gate key -> true once the ticket is accepted
   let nearGate = null;                         // gate the guest is standing at (or null)
   let autoEnter = null;                        // { a } — after a ticket clears, auto-walk the player IN
@@ -1032,6 +1048,7 @@ export function createVeyraWorld(container, opts) {
     // centroid; the red bridge + Ngoc Son temple toward the north shore.
     buildTurtleTower(lakeCx, lakeCz);
     buildBridgeAndTemple(lakeCx, lakeCz, lakeNorthZ);
+    buildHoanKiemMonuments(lakeCx, lakeCz, lakeNorthZ, lakeR);
 
     // ───────────────── SHOPS — on real buildings fronting the north shore ──
     // Pick the buildings closest to the lake's north water edge and attach the
@@ -1091,22 +1108,32 @@ export function createVeyraWorld(container, opts) {
       scene.add(birdMesh); ownedInstanced.push(birdMesh);
     }
 
+    // ─────────────── Lake ambience: mist + willows + koi + fireflies ──────
+    // `lakePoly` lets the weeping willows trace the real shore; `circles` receives
+    // their trunk collision (added before buildGrid() below).
+    ambience.build({ scene, lakeCx, lakeCz, lakeR, lakeNorthZ, lakePoly, circles });
+
     // ───────────────────────────── Player ────────────────────────────────
     // Spawn on a road by the lake's north shore, facing the lake/Turtle Tower.
     player = buildAvatar({ hue: playerHue, style: opts.playerStyle });
-    if (entered) {
-      // Signed in: restore the last saved world position if we have one; otherwise
-      // spawn on a road by the lake's north shore. Either way, face the lake.
-      const sp = opts.startPos;
-      if (sp && isFinite(sp.x) && isFinite(sp.z)) {
-        SPAWN = new THREE.Vector3(sp.x, 0, sp.z);
-      } else {
-        const spawnRoad = findNorthShoreSpawn(roadList, lakeCx, lakeNorthZ);
-        SPAWN = new THREE.Vector3(spawnRoad.x, 0, spawnRoad.z);
-      }
+    // Restore the last saved world position if we have one (works for both
+    // signed-in players and guests who walked around / cleared a gate). Falls
+    // back to a sensible spawn when there's nothing saved yet.
+    const sp = opts.startPos;
+    const hasSaved = sp && isFinite(sp.x) && isFinite(sp.z);
+    if (hasSaved) {
+      SPAWN = new THREE.Vector3(sp.x, 0, sp.z);
+      // Inside the city → face the lake; still outside → face the gate/centre.
+      spawnYaw = entered
+        ? Math.atan2(lakeCx - SPAWN.x, lakeCz - SPAWN.z)
+        : Math.atan2(0 - SPAWN.x, 0 - SPAWN.z);
+    } else if (entered) {
+      // Signed in, nothing saved: spawn on a road by the lake's north shore.
+      const spawnRoad = findNorthShoreSpawn(roadList, lakeCx, lakeNorthZ);
+      SPAWN = new THREE.Vector3(spawnRoad.x, 0, spawnRoad.z);
       spawnYaw = Math.atan2(lakeCx - SPAWN.x, lakeCz - SPAWN.z); // face lake centre
     } else {
-      // Guest: stand just OUTSIDE the North gate, facing in toward the city.
+      // Guest, nothing saved: stand just OUTSIDE the North gate, facing in.
       SPAWN = new THREE.Vector3(0, 0, -(fenceR + 16));
       spawnYaw = Math.atan2(0 - SPAWN.x, 0 - SPAWN.z);          // face the gate / centre
     }
@@ -1127,7 +1154,7 @@ export function createVeyraWorld(container, opts) {
     //    idle-animated people along the lakeside promenade + near spawn. The dense
     //    distant crowd stays the cheap procedural `people`. Skipped on low tier and
     //    fully guarded so a missing GLB never breaks the world. ──
-    if (q.tier !== 'low') {
+    if (SHOW_CITY_NPCS && q.tier !== 'low') {
       try {
         const [{ GLTFLoader }, skUtils] = await Promise.all([
           import('three/addons/loaders/GLTFLoader.js'),
@@ -1200,6 +1227,7 @@ export function createVeyraWorld(container, opts) {
   // Visual + a ring of blocker circles; later phases spawn unauthenticated
   // players OUTSIDE this fence and only open a gate once the ticket checks out.
   const fenceGates = [];   // { key, label, a, x, z, hue } — used by later phases
+  const shopDoors = [];    // { x, z, leaves, openT } — entrance doors that auto-open on approach
   function makeLabelTexture(text, hue) {
     const cv = document.createElement('canvas'); cv.width = 256; cv.height = 128;
     const cx = cv.getContext('2d');
@@ -1618,6 +1646,89 @@ export function createVeyraWorld(container, opts) {
     })();
   }
 
+  // THÁP BÚT + ĐÀI NGHIÊN + TƯỢNG ĐÀI LÝ THÁI TỔ — the iconic Hoan Kiem monuments.
+  // Tháp Bút (the stone "writing-brush" tower on its rock mound) and Đài Nghiên (the
+  // ink-slab gate) stand on the north shore at the temple entrance, before The Huc
+  // bridge; the Ly Thai To monument sits in a plaza on the lake's east side.
+  function buildHoanKiemMonuments(ox, oz, northZ, lakeR) {
+    const bronze = new THREE.MeshStandardMaterial({ color: hsl(150, 0.28, 0.30), roughness: 0.55, metalness: 0.7 });
+    const stonePale = new THREE.MeshStandardMaterial({ color: hsl(40, 0.10, 0.62), roughness: 0.9, metalness: 0 });
+    localMats.push(bronze, stonePale);
+
+    // ── THÁP BÚT — pen tower on a rock mound, just east of the temple axis ──
+    (function thapBut() {
+      const bx = ox - 9, bz = northZ - 15;
+      const g = new THREE.Group(); g.position.set(bx, 0, bz); scene.add(g);
+      // Rock mound (núi Độc Tôn).
+      const mound = new THREE.Mesh(new THREE.CylinderGeometry(2.0, 3.2, 1.6, 10), mossStone);
+      mound.position.y = 0.6; mound.castShadow = true; mound.receiveShadow = true; g.add(mound);
+      // Tapering square stone shaft (4-sided frustum), in three diminishing drums.
+      const drums = [{ rb: 1.05, rt: 0.9, h: 3.2, y: 1.4 }, { rb: 0.85, rt: 0.66, h: 3.0, y: 4.6 }, { rb: 0.62, rt: 0.42, h: 2.8, y: 7.6 }];
+      drums.forEach((d) => {
+        const shaft = new THREE.Mesh(new THREE.CylinderGeometry(d.rt, d.rb, d.h, 4), mossStone);
+        shaft.rotation.y = Math.PI / 4; shaft.position.y = d.y + d.h / 2; shaft.castShadow = true; g.add(shaft);
+      });
+      // Brush-tip: a slim 4-sided cone pointing at the sky ("Tả Thanh Thiên").
+      const tip = new THREE.Mesh(new THREE.ConeGeometry(0.5, 2.4, 4), mossStone);
+      tip.rotation.y = Math.PI / 4; tip.position.y = 10.4 + 1.2; tip.castShadow = true; g.add(tip);
+      circles.push({ x: bx, z: bz, r: 2.6 });
+    })();
+
+    // ── ĐÀI NGHIÊN — ink-slab gate astride the path toward the bridge ──
+    (function daiNghien() {
+      const gx = ox, gz = northZ - 8;
+      const g = new THREE.Group(); g.position.set(gx, 0, gz); scene.add(g);
+      const gap = 4.4, pillarH = 3.4;
+      [-1, 1].forEach((sd) => {
+        const pillar = new THREE.Mesh(new THREE.BoxGeometry(1.0, pillarH, 1.0), mossStone);
+        pillar.position.set(sd * gap / 2, pillarH / 2, 0); pillar.castShadow = true; pillar.receiveShadow = true; g.add(pillar);
+        circles.push({ x: gx + sd * gap / 2, z: gz, r: 0.8 });   // walk THROUGH the gap
+      });
+      // Lintel beam across the top.
+      const lintel = new THREE.Mesh(new THREE.BoxGeometry(gap + 1.6, 0.7, 1.2), mossStone);
+      lintel.position.y = pillarH + 0.35; lintel.castShadow = true; g.add(lintel);
+      // Ink-slab (nghiên): a shallow stone bowl resting on three little supports.
+      for (let i = 0; i < 3; i++) {
+        const a = (i / 3) * Math.PI * 2;
+        const sup = new THREE.Mesh(new THREE.SphereGeometry(0.26, 8, 6), darkWood);
+        sup.position.set(Math.cos(a) * 0.7, pillarH + 0.85, Math.sin(a) * 0.7); g.add(sup);
+      }
+      const slab = new THREE.Mesh(new THREE.SphereGeometry(1.15, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2), mossStone);
+      slab.scale.set(1, 0.45, 1); slab.position.y = pillarH + 1.0; slab.castShadow = true; g.add(slab);
+    })();
+
+    // ── TƯỢNG ĐÀI LÝ THÁI TỔ — bronze emperor on a stepped plinth, east plaza ──
+    (function lyThaiTo() {
+      const mx = ox + lakeR + 16, mz = oz + lakeR * 0.28;
+      const g = new THREE.Group(); g.position.set(mx, 0, mz); scene.add(g);
+      const faceLake = Math.atan2(ox - mx, oz - mz);   // statue faces the lake
+      g.rotation.y = faceLake;
+      // Raised stone plaza.
+      const plaza = new THREE.Mesh(new THREE.CylinderGeometry(7.5, 7.8, 0.4, 32), mats.paving);
+      plaza.position.y = 0.2; plaza.receiveShadow = true; g.add(plaza);
+      // Stepped plinth (three diminishing drums).
+      const steps = [{ r: 3.0, h: 1.0, y: 0.4 }, { r: 2.2, h: 1.2, y: 1.4 }, { r: 1.6, h: 3.0, y: 2.6 }];
+      steps.forEach((s) => {
+        const drum = new THREE.Mesh(new THREE.CylinderGeometry(s.r, s.r + 0.25, s.h, 24), stonePale);
+        drum.position.y = s.y + s.h / 2; drum.castShadow = true; drum.receiveShadow = true; g.add(drum);
+      });
+      const plinthTop = 5.6;
+      // Bronze figure: robed body, head, a held edict tablet, arms suggested.
+      const robe = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.95, 3.0, 14), bronze);
+      robe.position.y = plinthTop + 1.5; robe.castShadow = true; g.add(robe);
+      const chest = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.6, 0.8, 12), bronze);
+      chest.position.y = plinthTop + 3.1; chest.castShadow = true; g.add(chest);
+      const head = new THREE.Mesh(new THREE.SphereGeometry(0.34, 14, 12), bronze);
+      head.position.y = plinthTop + 3.85; head.castShadow = true; g.add(head);
+      const crown = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.34, 0.4, 12), bronze);
+      crown.position.y = plinthTop + 4.2; crown.castShadow = true; g.add(crown);
+      // Tablet (chiếu dời đô) held at the waist.
+      const tablet = new THREE.Mesh(new THREE.BoxGeometry(0.9, 1.1, 0.14), bronze);
+      tablet.position.set(0, plinthTop + 2.2, 0.6); tablet.rotation.x = -0.2; tablet.castShadow = true; g.add(tablet);
+      circles.push({ x: mx, z: mz, r: 3.4 });
+    })();
+  }
+
   // ════════════════════════ Shops / POIs / dressing ═════════════════════════
 
   // Real shops take the buildings closest to the lake's north water edge: attach
@@ -1650,7 +1761,45 @@ export function createVeyraWorld(container, opts) {
       );
       marker.position.set(cx2, my, cz2); scene.add(marker);
       interactables.push({ id: info.id, type: 'shop', name: info.name, hue: info.hue, pos: new THREE.Vector3(ex, 0, ez), trig: 5.2, marker, markerBaseY: my });
+      // A real entrance door at the threshold, facing the approach (shore) side,
+      // that swings open as the player nears — so an open shop looks open.
+      buildShopDoor(ex, ez, dirX / dl, dirZ / dl);
     }
+  }
+
+  // Free-standing glazed entrance door (frame + two leaves) at a shop threshold.
+  // `(nx,nz)` is the unit facing direction; leaves swing outward toward it.
+  function buildShopDoor(ex, ez, nx, nz) {
+    const g = new THREE.Group();
+    g.position.set(ex, 0, ez);
+    g.rotation.y = Math.atan2(nx, nz);          // local +z faces the approach side
+    const openW = 2.4, doorH = 2.8, half = openW / 2;
+    // Frame: jambs + lintel.
+    for (const sgn of [-1, 1]) {
+      const jamb = new THREE.Mesh(new THREE.BoxGeometry(0.16, doorH, 0.22), mats.metalFrame);
+      jamb.position.set(sgn * half, doorH / 2, 0); jamb.castShadow = true; g.add(jamb); ownedGeoms.push(jamb.geometry);
+    }
+    const lintel = new THREE.Mesh(new THREE.BoxGeometry(openW + 0.32, 0.22, 0.24), mats.metalFrame);
+    lintel.position.set(0, doorH + 0.11, 0); lintel.castShadow = true; g.add(lintel); ownedGeoms.push(lintel.geometry);
+    // Two glass leaves hinged at the jambs (meet at centre when shut).
+    const leafW = half - 0.06, leafH = doorH - 0.16, hY = leafH / 2 + 0.06;
+    const leaves = [];
+    for (const sgn of [-1, 1]) {
+      const hinge = new THREE.Group();
+      hinge.position.set(sgn * half, 0, 0);
+      const cx = -sgn * leafW / 2;              // leaf extends toward the centre
+      const frame = new THREE.Mesh(new THREE.BoxGeometry(leafW, leafH, 0.05), mats.metalFrame);
+      frame.position.set(cx, hY, -0.03); frame.castShadow = true; hinge.add(frame); ownedGeoms.push(frame.geometry);
+      const glass = new THREE.Mesh(new THREE.BoxGeometry(leafW - 0.12, leafH - 0.12, 0.04), mats.glassDark);
+      glass.position.set(cx, hY, 0.01); hinge.add(glass); ownedGeoms.push(glass.geometry);
+      const handle = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.42, 0.04), mats.steelDark);
+      handle.position.set(-sgn * (leafW - 0.12), 1.1, 0.07); hinge.add(handle); ownedGeoms.push(handle.geometry);
+      g.add(hinge);
+      // Open swings the free end outward to +z (left → -90°, right → +90°).
+      leaves.push({ grp: hinge, openYaw: sgn * Math.PI / 2 });
+    }
+    scene.add(g);
+    shopDoors.push({ x: ex, z: ez, leaves, openT: 0 });
   }
 
   function poiKiosk(x, z, faceX, faceZ, kind, accentHue) {
@@ -2057,7 +2206,7 @@ export function createVeyraWorld(container, opts) {
     // citykit detail is loaded; otherwise the procedural builder. (No vehicles.)
     add(items.lampPosts(lampP));
     for (const run of poleRuns) add(items.powerLines(run));
-    add(items.people(peopleP));
+    if (SHOW_CITY_NPCS) add(items.people(peopleP));   // ambient crowd removed (walk-through, no collision)
     addAwnings(awnP);
     add(items.hangingSigns(signP));
     add(items.planters(planterP));
@@ -2132,6 +2281,24 @@ export function createVeyraWorld(container, opts) {
   mini.className = 'v-minimap'; mini.width = 120; mini.height = 120;
   container.appendChild(mini); mini.style.display = 'none';
   const mctx = mini.getContext('2d');
+
+  // ── Dev perf overlay (hidden; toggle with `~` / backquote) ───────────────
+  // Shows FPS / frame-ms / draw calls / triangles / live pixel-ratio + tier so the
+  // perf work can be measured before/after on each device tier. Dev-only, no cost
+  // while hidden; cleaned up in dispose().
+  const perfHud = document.createElement('div');
+  perfHud.className = 'v-perfhud';
+  perfHud.style.cssText = 'position:absolute;top:8px;left:8px;z-index:50;display:none;padding:6px 9px;border-radius:8px;font:11px/1.45 ui-monospace,Menlo,Consolas,monospace;color:#bdf;background:rgba(6,14,18,.74);pointer-events:none;white-space:pre;letter-spacing:.2px';
+  container.appendChild(perfHud);
+  let perfHudOn = false, perfAccum = 0, perfFrames = 0;
+  const onPerfKey = (e) => {
+    if (e.key === '`' || e.key === '~') {
+      perfHudOn = !perfHudOn;
+      perfHud.style.display = perfHudOn ? 'block' : 'none';
+      perfAccum = 0; perfFrames = 0;
+    }
+  };
+  window.addEventListener('keydown', onPerfKey);
   const dotColor = (it) => it.type === 'shop' ? '#' + hsl(it.hue, 0.5, 0.62).getHexString()
     : it.type === 'quests' ? '#f0c860' : '#7fe0d0';
   function drawMinimap() {
@@ -2252,6 +2419,12 @@ export function createVeyraWorld(container, opts) {
   const _birdPos = new THREE.Vector3(), _birdFwd = new THREE.Vector3(), _birdQuat = new THREE.Quaternion();
   const _birdMat = new THREE.Matrix4(), _birdScl = new THREE.Vector3(1, 1, 1), _birdZ = new THREE.Vector3(0, 0, 1);
   let phase = 0, near = null, last = performance.now(), miniAccum = 0, posAccum = 0;
+  // PERF state: shadow-bake cadence, last-applied night factor (throttle slow uniform
+  // writes), and dynamic-resolution control (EMA of FPS + a cooldown so the pixel
+  // ratio steps smoothly between the tier max and a 0.66× floor).
+  let shadowAccum = 1, lastNight = -1;
+  const basePR = q.pixelRatio;
+  let dynScale = 1, dynCooldown = 0, fpsEma = 60;
 
   function step(now) {
     if (!running) return;
@@ -2265,6 +2438,14 @@ export function createVeyraWorld(container, opts) {
       post.render(dt);
       raf = requestAnimationFrame(step);
       return;
+    }
+
+    // PERF: re-bake the shadow map on a fixed ~30Hz cadence rather than every frame.
+    // Decouples the (expensive) static-city shadow pass from the display refresh; the
+    // player uses a fake blob shadow so only NPC shadows lag by 1–2 frames (invisible).
+    if (q.shadowMapSize > 0) {
+      shadowAccum += dt;
+      if (shadowAccum >= 1 / 30) { renderer.shadowMap.needsUpdate = true; shadowAccum = 0; }
     }
 
     let ix = 0, iz = 0;
@@ -2486,8 +2667,16 @@ export function createVeyraWorld(container, opts) {
     // city's windows light up as the sun sets, dim out after sunrise.
     const sunElev = environment.getSunElevation ? environment.getSunElevation() : 1;
     const night = Math.max(0, Math.min(1, 1 - sunElev / 0.5));
-    items.setNightFactor && items.setNightFactor(night);
-    setFacadeNight(night);
+    // PERF: `night` tracks the (slowly-moving) sun elevation, so only push the lamp /
+    // lantern / window-glow uniforms when it has meaningfully changed.
+    if (Math.abs(night - lastNight) > 0.01) {
+      lastNight = night;
+      items.setNightFactor && items.setNightFactor(night);
+      setFacadeNight(night);
+    }
+    // Lake ambience: mist fades with `night`, willow fronds sway in the wind, koi
+    // glide, fireflies glow after dusk. (`night` is computed fresh every frame above.)
+    ambience.update(t, dt, { camPos, windAmt, windDir, night });
     if (birdMesh) {
       for (let i = 0; i < birdParams.length; i++) {
         const bp = birdParams[i];
@@ -2504,41 +2693,55 @@ export function createVeyraWorld(container, opts) {
     }
     for (let i = 0; i < charMixers.length; i++) charMixers[i].update(dt);   // animate hero NPCs
 
+    // PERF: gate / guard / perimeter-patrol animation is INDEPENDENT of the
+    // interactables — run it ONCE per frame. (It used to sit inside the interactables
+    // loop below, recomputing every guard + perimeter instance N× per frame and
+    // setting the perimeter instanceMatrix.needsUpdate N× — N = interactables.length.)
+
+    // Gates swing open: signed-in players have them open on approach (the guards man
+    // the checkpoint) and close behind; guests' gates open on a valid ticket.
+    for (const fg of fenceGates) {
+      if (!fg.leaves) continue;
+      if (entered) { const gd = Math.hypot(pp.x - fg.x, pp.z - fg.z); fg.openTarget = gd < 14 ? 1 : 0; }
+      const tgt = fg.openTarget || 0;
+      if (Math.abs(fg.openT - tgt) > 0.001) {
+        fg.openT += (tgt - fg.openT) * Math.min(1, dt * 2.6);
+        for (const lf of fg.leaves) lf.grp.rotation.y = lf.closedYaw + lf.delta * fg.openT;
+      }
+    }
+    // Shop entrance doors swing open as the player approaches (closes when away).
+    for (const sd of shopDoors) {
+      const tgt = Math.hypot(pp.x - sd.x, pp.z - sd.z) < 6 ? 1 : 0;
+      if (Math.abs(sd.openT - tgt) > 0.001) {
+        sd.openT += (tgt - sd.openT) * Math.min(1, dt * 3.2);
+        for (const lf of sd.leaves) lf.grp.rotation.y = lf.openYaw * sd.openT;
+      }
+    }
+    for (let gi = 0; gi < liveGuards.length; gi++) {
+      const gp = liveGuards[gi].g.parts, p2 = liveGuards[gi].ph;
+      gp.torso.position.y = 1.05 + Math.abs(Math.sin(t * 1.7 + p2)) * 0.03;
+      gp.head.rotation.y = Math.sin(t * 0.5 + p2) * 0.45;
+      gp.armL.rotation.x = Math.sin(t * 1.3 + p2) * 0.12;
+      gp.armR.rotation.x = -Math.sin(t * 1.3 + p2) * 0.12;
+    }
+    if (perim) {
+      const P = perim;
+      for (let pi = 0; pi < P.N; pi++) {
+        const a = P.slots[pi], pp2 = P.ph[pi];
+        P.qq.setFromAxisAngle(P.up, Math.atan2(Math.cos(a), Math.sin(a)) + Math.sin(t * 0.6 + pp2) * 0.25);
+        P.pos.set(Math.cos(a) * P.ringR, Math.abs(Math.sin(t * 2.2 + pp2)) * 0.05, Math.sin(a) * P.ringR);
+        P.m.compose(P.pos, P.qq, P.scl);
+        P.body.setMatrixAt(pi, P.m); P.head.setMatrixAt(pi, P.m); P.capI.setMatrixAt(pi, P.m);
+      }
+      P.body.instanceMatrix.needsUpdate = true; P.head.instanceMatrix.needsUpdate = true; P.capI.instanceMatrix.needsUpdate = true;
+    }
+
+    // Per-interactable: the floating marker bob + the proximity glow pulse.
     for (let i = 0; i < interactables.length; i++) {
       const it = interactables[i];
       if (it.marker) {
         it.marker.rotation.z = t * 1.0 + i;
         it.marker.position.y = it.markerBaseY + Math.sin(t * 1.4 + i) * 0.12;
-      }
-
-      // Gates swing open: signed-in players have them open on approach (the guards
-      // man the checkpoint) and close behind; guests' gates open on a valid ticket.
-      for (const fg of fenceGates) {
-        if (!fg.leaves) continue;
-        if (entered) { const gd = Math.hypot(pp.x - fg.x, pp.z - fg.z); fg.openTarget = gd < 14 ? 1 : 0; }
-        const tgt = fg.openTarget || 0;
-        if (Math.abs(fg.openT - tgt) > 0.001) {
-          fg.openT += (tgt - fg.openT) * Math.min(1, dt * 2.6);
-          for (const lf of fg.leaves) lf.grp.rotation.y = lf.closedYaw + lf.delta * fg.openT;
-        }
-      }
-      for (let gi = 0; gi < liveGuards.length; gi++) {
-        const gp = liveGuards[gi].g.parts, p2 = liveGuards[gi].ph;
-        gp.torso.position.y = 1.05 + Math.abs(Math.sin(t * 1.7 + p2)) * 0.03;
-        gp.head.rotation.y = Math.sin(t * 0.5 + p2) * 0.45;
-        gp.armL.rotation.x = Math.sin(t * 1.3 + p2) * 0.12;
-        gp.armR.rotation.x = -Math.sin(t * 1.3 + p2) * 0.12;
-      }
-      if (perim) {
-        const P = perim;
-        for (let pi = 0; pi < P.N; pi++) {
-          const a = P.slots[pi], pp2 = P.ph[pi];
-          P.qq.setFromAxisAngle(P.up, Math.atan2(Math.cos(a), Math.sin(a)) + Math.sin(t * 0.6 + pp2) * 0.25);
-          P.pos.set(Math.cos(a) * P.ringR, Math.abs(Math.sin(t * 2.2 + pp2)) * 0.05, Math.sin(a) * P.ringR);
-          P.m.compose(P.pos, P.qq, P.scl);
-          P.body.setMatrixAt(pi, P.m); P.head.setMatrixAt(pi, P.m); P.capI.setMatrixAt(pi, P.m);
-        }
-        P.body.instanceMatrix.needsUpdate = true; P.head.instanceMatrix.needsUpdate = true; P.capI.instanceMatrix.needsUpdate = true;
       }
       if (it.glow) {
         it.glowMat.opacity = 0.35 + 0.25 * (0.5 + 0.5 * Math.sin(t * 2.2 + i));
@@ -2609,13 +2812,49 @@ export function createVeyraWorld(container, opts) {
     miniAccum += dt;
     if (miniAccum > 0.12) { drawMinimap(); miniAccum = 0; }
 
-    // Persist the world position (only once inside the city) so a reload resumes
-    // where the player was standing instead of respawning at the gate/shore.
+    // Persist the world position (for everyone — signed-in and guests) so a
+    // reload resumes where the player was standing. The `entered` flag rides
+    // along so a guest who already cleared a gate stays inside on reload.
     posAccum += dt;
-    if (entered && posAccum > 1.2) { posAccum = 0; opts.onPos && opts.onPos({ x: pp.x, z: pp.z }); }
+    if (posAccum > 1.2) { posAccum = 0; opts.onPos && opts.onPos({ x: pp.x, z: pp.z, entered }); }
+
+    // PERF: dynamic resolution to keep every tier smooth. Track an EMA of FPS; when we
+    // fall behind, step the device pixel ratio DOWN; when there's headroom, ease it back
+    // UP toward the tier's max. A cooldown after each change (rebuilding the composer's
+    // render targets isn't free) plus the dead-band between 45/58 FPS prevents thrash.
+    fpsEma += ((1 / Math.max(dt, 1e-3)) - fpsEma) * 0.1;
+    dynCooldown -= dt;
+    if (dynCooldown <= 0) {
+      let next = dynScale;
+      if (fpsEma < 45 && dynScale > 0.66) next = Math.max(0.66, dynScale - 0.1);
+      else if (fpsEma > 58 && dynScale < 1) next = Math.min(1, dynScale + 0.1);
+      if (next !== dynScale) {
+        dynScale = next;
+        const pr = basePR * dynScale;
+        renderer.setPixelRatio(pr);            // non-composed passes (Water) + passthrough
+        post.setPixelRatio && post.setPixelRatio(pr);  // resize the composer's RTs + passes
+        dynCooldown = 1.0;                     // let it settle before re-evaluating
+      }
+    }
 
     environment.update(dt, camPos);
     post.render(dt);
+
+    // Dev perf overlay (throttled to ~4Hz). renderer.info reflects the frame just
+    // rendered (incl. the water-reflection + post passes), so this is the true cost.
+    if (perfHudOn) {
+      perfFrames++; perfAccum += dt;
+      if (perfAccum >= 0.25) {
+        const fps = perfFrames / perfAccum;
+        const r = renderer.info.render;
+        perfHud.textContent =
+          `${fps.toFixed(0)} fps   ${(perfAccum / perfFrames * 1000).toFixed(1)} ms\n` +
+          `calls ${r.calls}   tris ${(r.triangles / 1000).toFixed(0)}k\n` +
+          `pr ${renderer.getPixelRatio().toFixed(2)}   tier ${q.tier}`;
+        perfAccum = 0; perfFrames = 0;
+      }
+    }
+
     raf = requestAnimationFrame(step);
   }
   raf = requestAnimationFrame(step);
@@ -2650,6 +2889,7 @@ export function createVeyraWorld(container, opts) {
       running = false; cancelAnimationFrame(raf);
       clearInterval(weatherTimer); clearInterval(timeTimer);
       document.removeEventListener('visibilitychange', onVis);
+      window.removeEventListener('keydown', onPerfKey);
       ro.disconnect();
       kb.dispose(); stick.dispose();
       dom.removeEventListener('pointerdown', camDown); dom.removeEventListener('pointermove', camMove);
@@ -2658,7 +2898,7 @@ export function createVeyraWorld(container, opts) {
       post.dispose();
       environment.dispose();
       mats.dispose();
-      facades.dispose(); items.dispose();
+      facades.dispose(); items.dispose(); ambience.dispose();
       // External-asset loaders + the reflective lake (its reflection RT + material).
       if (water) {
         scene.remove(water);
@@ -2687,6 +2927,7 @@ export function createVeyraWorld(container, opts) {
       renderer.dispose();
       if (renderer.domElement.parentNode) renderer.domElement.parentNode.removeChild(renderer.domElement);
       if (mini.parentNode) mini.parentNode.removeChild(mini);
+      if (perfHud.parentNode) perfHud.parentNode.removeChild(perfHud);
     },
     // Ticket accepted at gate `key`: drop its barrier so the guest can walk in.
     openGate(key) {

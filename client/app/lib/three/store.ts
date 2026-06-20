@@ -248,6 +248,28 @@ export function createVeyraStore(container, opts) {
   sill.position.set(0, 0.04, 0); door.add(sill);
   const doorGap = new THREE.Mesh(new THREE.BoxGeometry(2.6, 3.9, 0.16), M(new THREE.MeshBasicMaterial({ visible: false })));
   doorGap.position.set(0, 1.85, 0); door.add(doorGap);
+
+  // Two glass leaves hinged at the jambs that swing OPEN (outward, toward the
+  // plaza) as the player nears the exit — so the shop reads as "open", not a hole.
+  const matDoorGlass = lp(hsl(shopHue, 0.25, 0.62), { rough: 0.25, metal: 0.1 });
+  const doorLeaves = [];
+  {
+    const leafW = 1.36, leafH = 3.8, hY = leafH / 2 + 0.05;
+    [-1, 1].forEach((sgn) => {
+      const hinge = new THREE.Group();
+      hinge.position.set(sgn * 1.45, 0, 0);     // at the jamb
+      const cx = -sgn * leafW / 2;              // leaf extends toward the centre
+      const frame = new THREE.Mesh(new THREE.BoxGeometry(leafW, leafH, 0.07), matFrame);
+      frame.position.set(cx, hY, -0.03); frame.castShadow = true; hinge.add(frame);
+      const glass = new THREE.Mesh(new THREE.BoxGeometry(leafW - 0.16, leafH - 0.18, 0.05), matDoorGlass);
+      glass.position.set(cx, hY, 0.01); hinge.add(glass);
+      const handle = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.55, 0.05), matRail);
+      handle.position.set(-sgn * (leafW - 0.16), 1.15, 0.08); hinge.add(handle);
+      door.add(hinge);
+      // Open swings the free end outward to +z (left → -90°, right → +90°).
+      doorLeaves.push({ grp: hinge, openYaw: sgn * Math.PI / 2 });
+    });
+  }
   scene.add(door);
 
   // Low-poly potted plants in the floor-0 back corners.
@@ -699,6 +721,7 @@ export function createVeyraStore(container, opts) {
   const inspPos = new THREE.Vector3();
   const inspLook = new THREE.Vector3();
   let phase = 0, near = null, raf = 0, last = performance.now(), running = true;
+  let doorOpenT = 0;   // exit-door swing: 0 shut → 1 open
   // Which floor the player is currently standing on (derived from pp.y on flat
   // ground; updated explicitly at stair/elevator endpoints).
   let currentFloor = 0;
@@ -796,6 +819,16 @@ export function createVeyraStore(container, opts) {
       // Light the active floor button (target while moving, else current).
       const activeFloor = el.state === 'moving' ? el.nextFloor : el.curFloor;
       liftButtons.forEach((b) => { b.mesh.material = b.floor === activeFloor ? matBtnLit : matBtn; });
+    }
+
+    // Exit door: swing the leaves open as the player nears the floor-0 exit.
+    {
+      const dExit = currentFloor === 0 ? Math.hypot(pp.x, pp.z - (RZ - 0.4)) : 99;
+      const tgt = dExit < 4.5 ? 1 : 0;
+      if (Math.abs(doorOpenT - tgt) > 0.001) {
+        doorOpenT += (tgt - doorOpenT) * Math.min(1, dt * 3.2);
+        for (const lf of doorLeaves) lf.grp.rotation.y = lf.openYaw * doorOpenT;
+      }
     }
 
     // Determine currentFloor from pp.y when on flat ground (not mid-stair / ride).
