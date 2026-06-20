@@ -32,7 +32,7 @@ export function createEnvironment(renderer, scene, { quality, envHdrUrl } = {}) 
   const sky = new Sky();
   sky.scale.setScalar(450000);
   const skyU = sky.material.uniforms;
-  skyU.turbidity.value = 3.0;
+  skyU.turbidity.value = 2.4;
   skyU.rayleigh.value = 1.2;
   skyU.mieCoefficient.value = 0.005;
   skyU.mieDirectionalG.value = 0.8;
@@ -66,7 +66,7 @@ export function createEnvironment(renderer, scene, { quality, envHdrUrl } = {}) 
   scene.add(moon);
 
   // Clear-sky baseline values so weather can lerp back toward them.
-  const baseSky = { turbidity: 3.0, rayleigh: 1.2 };
+  const baseSky = { turbidity: 2.4, rayleigh: 1.2 };
 
   // ── Sun (key light) ───────────────────────────────────────────────────────
   // Warm white, intensity tuned for ACES. Position is driven by setTimeOfDay and
@@ -77,16 +77,18 @@ export function createEnvironment(renderer, scene, { quality, envHdrUrl } = {}) 
   if (shadowMapSize > 0) {
     sun.castShadow = true;
     sun.shadow.mapSize.set(shadowMapSize, shadowMapSize);
-    const sc = sun.shadow.camera; // orthographic frustum covering ~±70m of high-street
-    sc.left = -70;
-    sc.right = 70;
-    sc.top = 70;
-    sc.bottom = -70;
+    const sc = sun.shadow.camera; // orthographic frustum covering ~±95m around the player
+    sc.left = -95;
+    sc.right = 95;
+    sc.top = 95;
+    sc.bottom = -95;
     sc.near = 1;
-    sc.far = 300;
+    sc.far = 340;
     sc.updateProjectionMatrix();
-    sun.shadow.bias = -0.0004;
-    sun.shadow.normalBias = 0.02;
+    // Wider frustum spreads the shadow map over more ground (fewer texels/metre), so
+    // lift the biases a touch to keep contact shadows free of acne at the new range.
+    sun.shadow.bias = -0.0005;
+    sun.shadow.normalBias = 0.03;
     sun.shadow.radius = 4;
   }
   scene.add(sun);
@@ -95,7 +97,7 @@ export function createEnvironment(renderer, scene, { quality, envHdrUrl } = {}) 
   // ── Soft fill ─────────────────────────────────────────────────────────────
   // Kept deliberately low — sun + IBL carry the scene. Hemisphere supplies sky/ground
   // bounce; ambient lifts the deepest shadows just slightly.
-  const hemi = new THREE.HemisphereLight(0xbfd6ff, 0x6b5b45, 0.3);
+  const hemi = new THREE.HemisphereLight(0xc4d6d2, 0x756b5a, 0.3);
   const baseHemiIntensity = 0.3;
   hemi.position.set(0, 50, 0);
   scene.add(hemi);
@@ -147,7 +149,7 @@ export function createEnvironment(renderer, scene, { quality, envHdrUrl } = {}) 
   let curOvercastV = 0;     // remembered overcast so time changes keep weather mood
   const _horizonCol = new THREE.Color(0xff8a40); // low-sun warm
   const _zenithCol = new THREE.Color(0xfff6ea);  // high-sun neutral-warm
-  const _nightFog = new THREE.Color(0x0b1622);   // deep blue night haze
+  const _nightFog = new THREE.Color(0x141e2c);   // deep blue night haze (lifted so lamp pools read)
 
   // Apply the combined sun/fill/exposure/IBL response for the current daylight +
   // overcast. Called whenever either the time of day OR the weather changes so the
@@ -167,7 +169,7 @@ export function createEnvironment(renderer, scene, { quality, envHdrUrl } = {}) 
     // tone mapping, so it carries the night dimming even though three r160 has no
     // scene.environmentIntensity (the line below is a forward-compatible no-op).
     renderer.toneMappingExposure = baseExposure
-      * THREE.MathUtils.lerp(0.40, 1.0, curDaylight)
+      * THREE.MathUtils.lerp(0.52, 1.0, curDaylight)
       * THREE.MathUtils.lerp(1.0, 0.85, overcast);
     scene.environmentIntensity = THREE.MathUtils.lerp(0.12, 1.0, curDaylight);
     // Fade the starfield + moon in as night falls.
@@ -217,7 +219,7 @@ export function createEnvironment(renderer, scene, { quality, envHdrUrl } = {}) 
   // raises fill, and rolls in fog. Rain deepens fog and dims further.
   let weatherSunMul = 1.0;
   // Light, distant haze only — keep the scene crisp so the space reads clearly.
-  const fog = new THREE.Fog(0xc9d4dc, 150, 680);
+  const fog = new THREE.Fog(0xccd2cc, 150, 680);
   scene.fog = fog;
 
   function setWeather(w) {
@@ -237,7 +239,7 @@ export function createEnvironment(renderer, scene, { quality, envHdrUrl } = {}) 
 
     // Fog: by day tint toward the horizon sky and densify with murk; by night sink
     // toward a deep blue haze so distance reads dark, not milky-grey.
-    const dayFog = new THREE.Color(0xc9d4dc).lerp(new THREE.Color(0x8a98a4), murk);
+    const dayFog = new THREE.Color(0xccd2cc).lerp(new THREE.Color(0x9a9880), murk);
     fog.color.copy(dayFog).lerp(_nightFog, 1 - curDaylight);
     fog.near = THREE.MathUtils.lerp(150, 50, murk);
     fog.far = THREE.MathUtils.lerp(680, 260, murk);

@@ -147,6 +147,7 @@ export function createVeyraWorld(container, opts) {
   const FW = facades.tileWidth, FH = facades.tileHeight;
   for (const fm of facades.materials) {
     fm.side = THREE.DoubleSide;            // walls are single-quad soups; DoubleSide fixes winding + shading
+    fm.vertexColors = true;                // per-building tint (set below) multiplies the shared map → kills the "copy-paste" look
     for (const mp of [fm.map, fm.emissiveMap, fm.roughnessMap]) {
       if (mp) { mp.wrapS = THREE.RepeatWrapping; mp.wrapT = THREE.RepeatWrapping; mp.repeat.set(1 / FW, 1 / FH); mp.needsUpdate = true; }
     }
@@ -535,7 +536,7 @@ export function createVeyraWorld(container, opts) {
   let MAXR = 520;                              // player clamp radius (extentR + margin)
   // Orbit-zoom range. CAM_MAX is raised to ~extentR*0.7 in build() so the player can
   // pull WAY back to an aerial survey of the whole Old Quarter, then zoom to street level.
-  let CAM_MIN = 8, CAM_MAX = 420, CAM_ELEV_MAX = 1.5;
+  let CAM_MIN = 5, CAM_MAX = 420, CAM_ELEV_MAX = 1.5;
   let skylinePlaced = 0;                       // count of procedural backdrop boxes
 
   // ── Lake (Three.js Water) + wind + GLB/anim state ─────────
@@ -549,6 +550,7 @@ export function createVeyraWorld(container, opts) {
   // scattered reflective puddles on the roads, and the last-applied wetness (throttle).
   const wetMats = [];          // [{ m, r0, e0 }] base roughness/envMapIntensity
   let puddles = null, puddleMat = null;
+  let lampGlow = null, lampGlowMat = null;   // warm ground pools under street lamps (ramped at night)
   let lastWet = -1;
   // Dev weather override (press 'r' to cycle): -1 = real Open-Meteo, else an index
   // into FORCE_WX (clear / light rain / heavy rain) so the rain can be tested anytime.
@@ -842,6 +844,38 @@ export function createVeyraWorld(container, opts) {
     const roofTileGeoms = [];                              // pitched hip roofs (one merged mesh)
     const pitchedSet = new Set();                          // polys given a pitched roof (skip flat detail)
 
+    // ── FAÇADE RELIEF — protruding cornices + floor-line string courses ──────
+    // Buildings are extruded flat prisms, so every window/balcony is painted on the
+    // texture and walls read dead-flat at grazing angles. For the houses around the
+    // lake we trace a thin ledge ribbon (gờ tường) around the footprint at the
+    // roofline and at each upper floor line: real geometry that throws a horizontal
+    // shadow line and gives the wall depth. All ledges → ONE merged mesh. Skipped on
+    // LOW tier and for buildings far from the lake (the playable core), for budget.
+    const ledgePos = [], ledgeIdx = [];
+    const LEDGE_R2 = 210 * 210;                            // only within ~210 m of the lake
+    const pushLedge = (poly, ccx, ccz, y0, prot, hgt) => {
+      const N = poly.length;
+      const v = (arr) => { for (const p of arr) ledgePos.push(p[0], p[1], p[2]); };
+      for (let i = 0; i < N; i++) {
+        const a = poly[i], b = poly[(i + 1) % N];
+        let dx = b[0] - a[0], dz = b[1] - a[1];
+        const L = Math.hypot(dx, dz) || 1; dx /= L; dz /= L;
+        let nx = -dz, nz = dx;                              // edge normal
+        const mxe = (a[0] + b[0]) / 2, mze = (a[1] + b[1]) / 2;
+        if ((mxe - ccx) * nx + (mze - ccz) * nz < 0) { nx = -nx; nz = -nz; }   // force outward
+        const ox = nx * prot, oz = nz * prot;
+        const yb = y0, yt = y0 + hgt;
+        const iAb = [a[0], yb, a[1]], iBb = [b[0], yb, b[1]], iAt = [a[0], yt, a[1]], iBt = [b[0], yt, b[1]];
+        const oAb = [a[0] + ox, yb, a[1] + oz], oBb = [b[0] + ox, yb, b[1] + oz];
+        const oAt = [a[0] + ox, yt, a[1] + oz], oBt = [b[0] + ox, yt, b[1] + oz];
+        const base = ledgePos.length / 3;
+        v([oAb, oBb, oBt, oAt]);   // outer vertical face
+        v([iAt, iBt, oBt, oAt]);   // top of the ledge
+        v([iAb, oAb, oBb, iBb]);   // underside (catches the shadow line)
+        for (let qd = 0; qd < 3; qd++) { const bq = base + qd * 4; ledgeIdx.push(bq, bq + 1, bq + 2, bq, bq + 2, bq + 3); }
+      }
+    };
+
     // Reserve enterable-landmark footprints on the lake promenade (facing the
     // lake) so the OSM footprints below can be cleared from those spots — otherwise
     // the landmark boxes would intersect real buildings. Each site's facade sits
@@ -932,7 +966,32 @@ export function createVeyraWorld(container, opts) {
       wgeo.setAttribute('position', new THREE.Float32BufferAttribute(wpos, 3));
       wgeo.setAttribute('uv', new THREE.Float32BufferAttribute(wuv, 2));
       wgeo.computeVertexNormals();
+      // Per-building tint: one constant colour over all of this house's walls so
+      // neighbours sharing the SAME façade material still read as individual houses
+      // (brighter/darker, a touch warmer/cooler). Multiplies the texture via
+      // vertexColors — no extra material/draw call. Range stays near white so the
+      // painted-plaster look is preserved; lit windows (emissiveMap) are untouched.
+      const tA = hash01(cx2 * 0.13 + 5.7, cz2 * 0.17 - 3.1);
+      const tB = hash01(cz2 * 0.11 - 2.3, cx2 * 0.19 + 7.9);
+      const bright = 0.80 + tA * 0.34;          // 0.80 .. 1.14
+      const warm = (tB - 0.5) * 0.12;           // ±0.06 warm/cool skew
+      const tcR = Math.min(1.3, bright * (1 + warm));
+      const tcG = bright;
+      const tcB = Math.min(1.3, bright * (1 - warm));
+      const vcount = wpos.length / 3;
+      const cols = new Float32Array(vcount * 3);
+      for (let k = 0; k < vcount; k++) { cols[k * 3] = tcR; cols[k * 3 + 1] = tcG; cols[k * 3 + 2] = tcB; }
+      wgeo.setAttribute('color', new THREE.Float32BufferAttribute(cols, 3));
       bucketGeoms[facades.pickVariant(hash01(cx2 + 3.1, cz2 - 1.7), h)].push(wgeo);
+
+      // Façade relief: a roofline cornice + upper floor-line bands for near-lake
+      // houses, so the flat prism gains real horizontal shadow lines (see pushLedge).
+      if (q.tier !== 'low' && h >= 6 && ((cx2 - lakeCx) ** 2 + (cz2 - lakeCz) ** 2) < LEDGE_R2) {
+        pushLedge(poly, cx2, cz2, h - 0.4, 0.28, 0.34);                 // cornice just under the roof
+        for (let fy = 3.3; fy <= h - 2.0; fy += 3.3) {
+          pushLedge(poly, cx2, cz2, fy - 0.09, 0.12, 0.18);            // slim band at each floor line
+        }
+      }
 
       // ── ROOF TYPE: seeded choice between a pitched terracotta hip roof and a
       // flat cap. Most low tube-houses (and a few mid ones) get a tiled hip roof
@@ -1030,6 +1089,21 @@ export function createVeyraWorld(container, opts) {
         tileMesh.castShadow = true; tileMesh.receiveShadow = true;
         scene.add(tileMesh);
       }
+    }
+    // Merge all façade-relief ledges (cornices + floor bands) → one trim mesh.
+    if (ledgePos.length) {
+      const lg = new THREE.BufferGeometry();
+      lg.setAttribute('position', new THREE.Float32BufferAttribute(ledgePos, 3));
+      lg.setIndex(ledgeIdx); lg.computeVertexNormals();
+      ownedGeoms.push(lg);
+      // Weathered render/concrete trim, DoubleSide so winding never matters.
+      const trimMat = new THREE.MeshStandardMaterial({ color: hsl(40, 0.05, 0.60), roughness: 0.92, metalness: 0, side: THREE.DoubleSide });
+      localMats.push(trimMat);
+      wetMats.push({ m: trimMat, r0: trimMat.roughness, e0: 1 });
+      const lm = new THREE.Mesh(lg, trimMat);
+      lm.castShadow = true; lm.receiveShadow = true;
+      lm.matrixAutoUpdate = false; lm.updateMatrix();
+      scene.add(lm);
     }
 
     // ── ROOF DETAIL on the buildings nearest the lake centre. Rank a copy of
@@ -1160,6 +1234,119 @@ export function createVeyraWorld(container, opts) {
         const roadMesh = new THREE.Mesh(roadMerged, mats.asphalt);
         roadMesh.position.y = 0.14; roadMesh.receiveShadow = true;
         scene.add(roadMesh);
+      }
+    }
+
+    // ── ROAD DETAILING — raised kerbs, stone pavements + dashed lane markings ──
+    // Static realism for the carriageway: a vertical KERB face (đá vỉa) along each
+    // road edge rising from the asphalt to the sidewalk, a flat PAVING slab (vỉa
+    // hè) behind it, and dashed centre LANE markings on the wider streets. Any
+    // pavement stretch whose centre falls inside a real building footprint is
+    // skipped — Old-Quarter tube houses front straight onto the kerb, so the stone
+    // never pokes through a wall (narrow alleys simply get no sidewalk). Each
+    // category is merged into ONE mesh → only ~3 extra draw calls for the whole map.
+    if (roadList.length) {
+      const ROAD_Y = 0.14, KERB_Y = 0.205, LINE_Y = 0.158;   // asphalt < kerb-top; paint just above asphalt
+      const SW = 2.2;                                          // sidewalk depth (m)
+
+      // Point-in-building test (buildingPolys was filled during the building loop
+      // above, so it's complete by now). bbox pre-filter keeps it cheap.
+      const inBldg = (x, z) => {
+        for (let b = 0; b < buildingPolys.length; b++) {
+          const bp = buildingPolys[b];
+          if (x < bp.minx || x > bp.maxx || z < bp.minz || z > bp.maxz) continue;
+          const poly = bp.poly; let inside = false;
+          for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+            const xi = poly[i][0], zi = poly[i][1], xj = poly[j][0], zj = poly[j][1];
+            if (((zi > z) !== (zj > z)) && (x < (xj - xi) * (z - zi) / (zj - zi) + xi)) inside = !inside;
+          }
+          if (inside) return true;
+        }
+        return false;
+      };
+
+      const sPos = [], sIdx = [], sUV = [];   // sidewalk slabs (paving) + planar UVs for the stone map
+      const kPos = [], kIdx = [];   // kerb faces (curb)
+      const lPos = [], lIdx = [];   // lane markings (paint)
+      const quad = (P, I, ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz) => {
+        const base = P.length / 3;
+        P.push(ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz);
+        I.push(base, base + 1, base + 2, base, base + 2, base + 3);
+      };
+
+      for (const r of roadList) {
+        const pts = r.pts; if (!pts || pts.length < 2) continue;
+        const hw = (r.w && r.w > 0 ? r.w : 4) / 2;
+        const wide = hw >= 3;        // centre dashes only on real carriageways, not alleys
+        let arc = 0;                 // running arc-length for the dash pattern
+
+        for (let i = 0; i < pts.length - 1; i++) {
+          const a = pts[i], b = pts[i + 1];
+          const dx = b[0] - a[0], dz = b[1] - a[1];
+          const len = Math.hypot(dx, dz); if (len < 0.001) continue;
+          const tx = dx / len, tz = dz / len;   // unit tangent
+          const nx = -tz, nz = tx;              // left normal
+
+          // Kerb + pavement on BOTH sides of the segment.
+          for (const s of [1, -1]) {
+            const ix0 = a[0] + nx * hw * s, iz0 = a[1] + nz * hw * s;                 // road edge, A
+            const ix1 = b[0] + nx * hw * s, iz1 = b[1] + nz * hw * s;                 // road edge, B
+            const ox0 = a[0] + nx * (hw + SW) * s, oz0 = a[1] + nz * (hw + SW) * s;   // sidewalk outer, A
+            const ox1 = b[0] + nx * (hw + SW) * s, oz1 = b[1] + nz * (hw + SW) * s;   // sidewalk outer, B
+            const mx = (ix0 + ix1 + ox0 + ox1) * 0.25, mz = (iz0 + iz1 + oz0 + oz1) * 0.25;
+            if (inBldg(mx, mz)) continue;       // pavement would sit inside a building → skip
+            // Vertical kerb face (asphalt → kerb top) along the road edge.
+            quad(kPos, kIdx, ix0, ROAD_Y, iz0, ix1, ROAD_Y, iz1, ix1, KERB_Y, iz1, ix0, KERB_Y, iz0);
+            // Flat sidewalk slab behind the kerb (planar XZ UVs → ~2 m stone tiles).
+            quad(sPos, sIdx, ix0, KERB_Y, iz0, ix1, KERB_Y, iz1, ox1, KERB_Y, oz1, ox0, KERB_Y, oz0);
+            sUV.push(ix0 * 0.125, iz0 * 0.125, ix1 * 0.125, iz1 * 0.125, ox1 * 0.125, oz1 * 0.125, ox0 * 0.125, oz0 * 0.125);
+          }
+
+          // Dashed centre line: march the segment, ON for 2.4 m then OFF for 3.0 m.
+          if (wide) {
+            let t = 0;
+            while (t < len) {
+              const step = Math.min(0.6, len - t);
+              if ((arc % 5.4) < 2.4) {
+                const w2 = 0.09;
+                const cx0 = a[0] + tx * t, cz0 = a[1] + tz * t;
+                const cx1 = a[0] + tx * (t + step), cz1 = a[1] + tz * (t + step);
+                quad(lPos, lIdx,
+                  cx0 + nx * w2, LINE_Y, cz0 + nz * w2,
+                  cx1 + nx * w2, LINE_Y, cz1 + nz * w2,
+                  cx1 - nx * w2, LINE_Y, cz1 - nz * w2,
+                  cx0 - nx * w2, LINE_Y, cz0 - nz * w2);
+              }
+              arc += step; t += step;
+            }
+          }
+        }
+      }
+
+      const mkGeo = (P, I) => {
+        const g = new THREE.BufferGeometry();
+        g.setAttribute('position', new THREE.Float32BufferAttribute(P, 3));
+        g.setIndex(I); g.computeVertexNormals();
+        ownedGeoms.push(g);
+        return g;
+      };
+      const addStatic = (mesh) => { mesh.matrixAutoUpdate = false; mesh.updateMatrix(); scene.add(mesh); };
+      if (sPos.length) {
+        const g = mkGeo(sPos, sIdx);
+        g.setAttribute('uv', new THREE.Float32BufferAttribute(sUV, 2));
+        const m = new THREE.Mesh(g, mats.paving);
+        m.receiveShadow = true; addStatic(m);
+      }
+      if (kPos.length) {
+        const m = new THREE.Mesh(mkGeo(kPos, kIdx), mats.curb);
+        m.castShadow = false; m.receiveShadow = true; addStatic(m);
+      }
+      if (lPos.length) {
+        // Worn off-white road paint; polygonOffset so it never z-fights the asphalt.
+        const lineMat = new THREE.MeshStandardMaterial({ color: hsl(46, 0.10, 0.74), roughness: 0.7, metalness: 0 });
+        lineMat.polygonOffset = true; lineMat.polygonOffsetFactor = -4; lineMat.polygonOffsetUnits = -4;
+        localMats.push(lineMat);
+        const m = new THREE.Mesh(mkGeo(lPos, lIdx), lineMat); addStatic(m);
       }
     }
 
@@ -1308,7 +1495,7 @@ export function createVeyraWorld(container, opts) {
 
     // ───────────────────────────── Player ────────────────────────────────
     // Spawn on a road by the lake's north shore, facing the lake/Turtle Tower.
-    player = buildAvatar({ hue: playerHue, style: opts.playerStyle });
+    player = buildAvatar({ hue: playerHue, style: opts.playerStyle, age: opts.playerAge });
     // Restore the last saved world position if we have one (works for both
     // signed-in players and guests who walked around / cleared a gate). Falls
     // back to a sensible spawn when there's nothing saved yet.
@@ -1484,7 +1671,7 @@ export function createVeyraWorld(container, opts) {
 
   // ── Remote players ───────────────────────────────────────────────────────
   function makeRemote(state) {
-    const av = buildAvatar({ hue: state.hue, style: state.style });
+    const av = buildAvatar({ hue: state.hue, style: state.style, age: state.age });
     av.group.position.set(state.x, 0, state.z);
     av.group.rotation.y = state.rotY || 0;
     scene.add(av.group);
@@ -1553,6 +1740,8 @@ export function createVeyraWorld(container, opts) {
         ez(r.parts.legL, Math.sin(r.phase) * sw); ez(r.parts.legR, -Math.sin(r.phase) * sw);
         ez(r.parts.armL, -Math.sin(r.phase) * sw * 0.7); ez(r.parts.armR, Math.sin(r.phase) * sw * 0.7);
       }
+      // Face life (blink / idle look) for remote avatars too.
+      r.av.update && r.av.update(dt, { moving: !seated && r.anim === 'walk' });
       if (r.tag) r.tag.quaternion.copy(camera.quaternion);
     }
   }
@@ -1605,6 +1794,7 @@ export function createVeyraWorld(container, opts) {
     const targetGroup = (SELF_ID && id === SELF_ID)
       ? (player && player.group)
       : (remotePlayers.get(id) && remotePlayers.get(id).group);
+    console.log('[chat] say id=', id, 'SELF_ID=', SELF_ID, 'player?', !!player, 'targetGroup?', !!targetGroup, 'text=', JSON.stringify(text));
     if (!targetGroup) return;
     const prev = bubbles.get(id);
     if (prev) { prev.group.remove(prev.sprite); }
@@ -2275,6 +2465,26 @@ export function createVeyraWorld(container, opts) {
       const ang = Math.atan2(lakeCx - x, lakeCz - z);   // face the lakeside path
       poleSign(x, z, ang, plateTex('PHỐ ' + name, 'QUẬN HOÀN KIẾM'), 2.2, 2.9);
       placed.push([x, z]);
+    }
+
+    // 1b) Old-Quarter "Hàng …" plates on the wider roads NORTH of the lake (the
+    //     real 36-streets district). Placed at each road's north end, capped.
+    const HANG = ['Hàng Bạc', 'Hàng Gai', 'Hàng Bồ', 'Hàng Bông', 'Hàng Mã', 'Hàng Thiếc', 'Hàng Quạt', 'Hàng Buồm', 'Hàng Bè', 'Mã Mây', 'Tạ Hiện', 'Hàng Chiếu', 'Hàng Giấy', 'Hàng Nón', 'Hàng Vải', 'Lương Ngọc Quyến', 'Thuốc Bắc', 'Lò Rèn'];
+    const capHang = TIER === 'low' ? 0 : TIER === 'mid' ? 8 : 16;
+    const northRoads = roadList
+      .filter((r) => r.w >= 2.5 && r.pts && r.pts.length >= 2)
+      .map((r) => { const a = r.pts[0], b = r.pts[r.pts.length - 1]; const ex = a[1] < b[1] ? a : b; return { r, ex, far: ex === a ? b : a, d: Math.hypot((a[0] + b[0]) / 2 - lakeCx, (a[1] + b[1]) / 2 - lakeCz) }; })
+      .filter((o) => o.ex[1] < northZ - 6 && o.d <= lakeR + 220)
+      .sort((p, q2) => p.d - q2.d);
+    let hi = 0;
+    for (const o of northRoads) {
+      if (hi >= capHang) break;
+      const a = o.ex, b = o.far;
+      if (!farEnough(a[0], a[1], 22) || within(a[0], a[1])) continue;
+      let dx = b[0] - a[0], dz = b[1] - a[1]; const dn = Math.hypot(dx, dz) || 1; dx /= dn; dz /= dn;
+      const off = o.r.w / 2 + 0.7;
+      poleSign(a[0] - dz * off, a[1] + dx * off, Math.atan2(dx, dz), plateTex('PHỐ ' + HANG[hi % HANG.length].toUpperCase(), 'QUẬN HOÀN KIẾM'), 2.0, 2.8);
+      placed.push([a[0], a[1]]); hi++;
     }
 
     // 2) "NGÕ" alley plates on the narrow roads nearest the lake.
@@ -3078,6 +3288,39 @@ export function createVeyraWorld(container, opts) {
     // Build + add (each builder returns a Group). Awnings use a GLB path when the
     // citykit detail is loaded; otherwise the procedural builder. (No vehicles.)
     add(items.lampPosts(lampP));
+
+    // ── STREET-LAMP GROUND GLOW — warm pools of light under each lamp at night. ──
+    // The lamp heads are emissive but cast no real light (a PointLight per lamp is
+    // too costly for hundreds of them). Instead lay a soft additive disc on the
+    // pavement under each lamp; its opacity is ramped from the night factor in the
+    // loop so the street reads as actually lit after dusk, dark by day. One
+    // InstancedMesh → 1 draw call for the whole set.
+    if (lampP.length) {
+      const gc = document.createElement('canvas'); gc.width = gc.height = 64;
+      const gx = gc.getContext('2d');
+      const grd = gx.createRadialGradient(32, 32, 0, 32, 32, 32);
+      grd.addColorStop(0, 'rgba(255,224,168,1)');
+      grd.addColorStop(0.45, 'rgba(255,210,140,0.5)');
+      grd.addColorStop(1, 'rgba(255,200,120,0)');
+      gx.fillStyle = grd; gx.fillRect(0, 0, 64, 64);
+      const glowTex = new THREE.CanvasTexture(gc); glowTex.colorSpace = THREE.SRGBColorSpace; glowTex.needsUpdate = true;
+      ownedTextures.push(glowTex);
+      const glowGeo = new THREE.CircleGeometry(3.4, 16); glowGeo.rotateX(-Math.PI / 2); ownedGeoms.push(glowGeo);
+      lampGlowMat = new THREE.MeshBasicMaterial({
+        map: glowTex, color: 0xffe0a8, transparent: true, opacity: 0,
+        blending: THREE.AdditiveBlending, depthWrite: false, fog: false,
+      });
+      localMats.push(lampGlowMat);
+      lampGlow = new THREE.InstancedMesh(glowGeo, lampGlowMat, lampP.length);
+      lampGlow.frustumCulled = false; lampGlow.renderOrder = 2; lampGlow.visible = false;
+      const gm = new THREE.Matrix4(), gp = new THREE.Vector3(), gq = new THREE.Quaternion(), gs = new THREE.Vector3(1, 1, 1);
+      for (let i = 0; i < lampP.length; i++) {
+        gp.set(lampP[i].x, 0.18, lampP[i].z); gm.compose(gp, gq, gs);
+        lampGlow.setMatrixAt(i, gm);
+      }
+      lampGlow.instanceMatrix.needsUpdate = true; lampGlow.matrixAutoUpdate = false; lampGlow.updateMatrix();
+      scene.add(lampGlow); ownedInstanced.push(lampGlow);
+    }
     for (const run of poleRuns) add(items.powerLines(run));
     if (SHOW_CITY_NPCS) add(items.people(peopleP));   // ambient crowd removed (walk-through, no collision)
     addAwnings(awnP);
@@ -3165,6 +3408,10 @@ export function createVeyraWorld(container, opts) {
   container.appendChild(perfHud);
   let perfHudOn = false, perfAccum = 0, perfFrames = 0;
   const onPerfKey = (e) => {
+    // Never hijack keystrokes while the player is typing (e.g. the chat box) — the
+    // dev hotkeys ('`' perf overlay, 'r' weather) must not fire mid-message.
+    const tgt = e.target;
+    if (tgt && (tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA' || tgt.isContentEditable)) return;
     if (e.key === '`' || e.key === '~') {
       perfHudOn = !perfHudOn;
       perfHud.style.display = perfHudOn ? 'block' : 'none';
@@ -3178,6 +3425,10 @@ export function createVeyraWorld(container, opts) {
         environment.setWeather({ overcast: w.o, rain: w.r });
         applyFog(w.o);
       }
+    } else if (e.key === '1') {
+      if (player && !sitting) player.playEmote('wave');
+    } else if (e.key === '2') {
+      if (player && !sitting) player.playEmote('celebrate');
     }
   };
   window.addEventListener('keydown', onPerfKey);
@@ -3363,6 +3614,10 @@ export function createVeyraWorld(container, opts) {
     if (keys['s'] || keys['arrowdown']) iz += 1;
     if (keys['a'] || keys['arrowleft']) ix -= 1;
     if (keys['d'] || keys['arrowright']) ix += 1;
+    // Mirror the keyboard direction on the on-screen joystick knob (ix/iz are
+    // keyboard-only here, before the touch input is mixed in) so the bottom-left
+    // touch control and WASD/arrows stay visually in sync. No-op while it's touched.
+    stick.setVisual && stick.setVisual(ix, iz);
     ix += joy.x; iz += joy.y;
     let mag = Math.hypot(ix, iz);
     let moving = mag > 0.08;
@@ -3486,63 +3741,73 @@ export function createVeyraWorld(container, opts) {
       pp.y += (baseY - pp.y) * Math.min(1, dt * 9);
     }
 
+    const emoting = player.isEmoting && player.isEmoting();
     if (sitting) {
       applySitPose(parts, player.group, true);
     } else {
+      // Walk cadence + swing scale by age (young = quicker/bigger, old = slower).
+      const g8 = player.gait || { stepRate: 1, swingAmt: 1 };
       const sp = moving ? mag : 0;
-      phase += dt * (6 + sp * 4) * (moving ? 1 : 0);
-      const swing = moving ? 0.7 * sp : 0;
+      phase += dt * (6 + sp * 4) * (moving ? 1 : 0) * g8.stepRate;
+      const swing = moving ? 0.7 * sp * g8.swingAmt : 0;
       const ease = (p, v) => p.rotation.x += (v - p.rotation.x) * Math.min(1, dt * 14);
       ease(parts.legL, Math.sin(phase) * swing);
       ease(parts.legR, -Math.sin(phase) * swing);
-      ease(parts.armL, -Math.sin(phase) * swing * 0.7);
-      ease(parts.armR, Math.sin(phase) * swing * 0.7);
+      // While an emote plays the avatar drives its own arms — don't fight it here.
+      if (!emoting) { ease(parts.armL, -Math.sin(phase) * swing * 0.7); ease(parts.armR, Math.sin(phase) * swing * 0.7); }
       parts.torso.position.y = 1.05 + (moving ? Math.abs(Math.sin(phase)) * 0.04 : 0);
     }
+    // Face layer (blink / idle look / expression / emote), AFTER the base pose so
+    // it composites on top. Wide-eyed surprise mid-jump; neutral when grounded.
+    if (!sitting && !emoting) player.setExpression(pp.y <= baseY + 0.05 ? 'neutral' : 'surprised');
+    player.update(dt, { moving, grounded: pp.y <= baseY + 0.05 });
     blob.position.set(pp.x, pp.y + 0.05, pp.z);
 
-    // Camera-wall occlusion: keep the third-person camera from passing through
-    // buildings — in narrow alleys that let you see into the hollow interiors.
-    // Cast a 2D ray from the player back along the orbit direction; if it hits a
-    // façade before camDist, pull the camera in to just before that wall. Only at
-    // street/alley angles (high survey angles sit safely above the rooftops).
-    const hCos = Math.max(0.22, Math.cos(camElev));
+    // Frame-rate-independent damping helper.
+    const damp = (cur, target, lambda) => cur + (target - cur) * (1 - Math.exp(-lambda * dt));
+    // Manual orbit: drag = orient, wheel = zoom. Lightly damped so it's smooth.
+    camYawCur = damp(camYawCur, camYaw, 12);
+    camElevCur = damp(camElevCur, camElev, 12);
+
+    // ── Camera wall-avoidance (spring arm) ────────────────────────────────────
+    // ONLY pulls the camera IN when a wall is actually between it and the player —
+    // so ngõ/ngách + building interiors never clip through walls — and otherwise
+    // leaves the user's zoom/angle alone. The camera ALWAYS looks at the player's
+    // head, so however close it is forced it can't jam low and stare upward.
+    const pivotY = pp.y + 1.5;
+    const hCos = Math.max(0.2, Math.cos(camElevCur));
     let wantD = camDist;
-    if (gridB && camElev < 0.95) {
-      const sx = Math.sin(camYaw), sz = Math.cos(camYaw);   // horizontal player→camera dir
+    if (gridB) {
+      const sx = Math.sin(camYawCur), sz = Math.cos(camYawCur);   // player→camera (horizontal)
       const hd = camDist * hCos;
       let hit = hd;
-      const steps = Math.min(8, Math.ceil(hd / GCELL) + 1);
+      const steps = Math.min(7, Math.ceil(hd / GCELL) + 1);
       const seenC = new Set();
       for (let s = 0; s <= steps; s++) {
         const sxp = pp.x + sx * s * GCELL, szp = pp.z + sz * s * GCELL;
         const cgx = Math.floor(sxp / GCELL), cgz = Math.floor(szp / GCELL);
         for (let gx = cgx - 1; gx <= cgx + 1; gx++) for (let gz = cgz - 1; gz <= cgz + 1; gz++) {
           const arr = gridB.get(gx + '_' + gz); if (!arr) continue;
-          for (let m = 0; m < arr.length; m++) {
-            const bi = arr[m]; if (seenC.has(bi)) continue; seenC.add(bi);
+          for (let mi = 0; mi < arr.length; mi++) {
+            const bi = arr[mi]; if (seenC.has(bi)) continue; seenC.add(bi);
             const poly = buildingPolys[bi].poly;
             for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
               const ax = poly[j][0], az = poly[j][1], ex = poly[i][0] - ax, ez = poly[i][1] - az;
               const det = ex * sz - sx * ez; if (det < 1e-6 && det > -1e-6) continue;
               const dx0 = ax - pp.x, dz0 = az - pp.z;
-              const tt = (ex * dz0 - ez * dx0) / det;
-              const uu = (sx * dz0 - sz * dx0) / det;
-              if (uu >= 0 && uu <= 1 && tt > 0.5 && tt < hit) hit = tt;
+              const tt = (ex * dz0 - ez * dx0) / det;     // distance along ray to the wall
+              const uu = (sx * dz0 - sz * dx0) / det;     // param along the wall edge
+              if (uu >= 0 && uu <= 1 && tt > 0.05 && tt < hit) hit = tt;
             }
           }
         }
       }
-      if (hit < hd) wantD = Math.max(2.4, (hit - 0.5) / hCos);
+      // Sit just before the nearest wall — never beyond it (no clip), small floor.
+      if (hit < hd) wantD = Math.min(camDist, Math.max(0.35, (hit - 0.4) / hCos));
     }
-    // Frame-rate-independent damping helper.
-    const damp = (cur, target, lambda) => cur + (target - cur) * (1 - Math.exp(-lambda * dt));
+    // Pull in fast (no clip), ease back out slowly (no pop).
+    camDcur += (wantD - camDcur) * Math.min(1, dt * (wantD < camDcur ? 20 : 4));
 
-    // Pull in fast (prevent clipping), ease back out slowly (no pop).
-    camDcur += (wantD - camDcur) * Math.min(1, dt * (wantD < camDcur ? 18 : 3));
-    // Damp the orbit angles so drags feel weighty, not twitchy.
-    camYawCur = damp(camYawCur, camYaw, 10);
-    camElevCur = damp(camElevCur, camElev, 10);
     // Player planar speed → a subtle dynamic FOV kick when moving fast.
     const instSpeed = Math.hypot(pp.x - prevPx, pp.z - prevPz) / Math.max(dt, 1e-3);
     prevPx = pp.x; prevPz = pp.z;
@@ -3551,19 +3816,20 @@ export function createVeyraWorld(container, opts) {
     camera.fov += (fovTarget - camera.fov) * Math.min(1, dt * 4);
     camera.updateProjectionMatrix();
 
+    // Camera = head pivot + orbit offset; ALWAYS look back at the head so the
+    // player stays framed no matter how close the wall-avoidance forces it.
     const offX = camDcur * Math.cos(camElevCur) * Math.sin(camYawCur);
     const offZ = camDcur * Math.cos(camElevCur) * Math.cos(camYawCur);
     const offY = camDcur * Math.sin(camElevCur);
-    camTarget.set(pp.x + offX, pp.y + offY + 1.2, pp.z + offZ);
-    if (camTarget.y < 0.8) camTarget.y = 0.8;     // ground/lake clamp
-    camera.position.lerp(camTarget, Math.min(1, dt * 6));
-    if (camera.position.y < 0.8) camera.position.y = 0.8;
-    // Smoothed look target trails the player slightly for a cinematic feel.
-    tmp.set(pp.x, pp.y + 1.5, pp.z);
+    camTarget.set(pp.x + offX, pivotY + offY, pp.z + offZ);
+    if (camTarget.y < 0.6) camTarget.y = 0.6;     // ground/lake clamp
+    camera.position.lerp(camTarget, Math.min(1, dt * 9));
+    if (camera.position.y < 0.6) camera.position.y = 0.6;
+    tmp.set(pp.x, pivotY, pp.z);
     if (!lookInit) { lookTarget.copy(tmp); lookInit = true; }
-    lookTarget.x = damp(lookTarget.x, tmp.x, 12);
-    lookTarget.y = damp(lookTarget.y, tmp.y, 12);
-    lookTarget.z = damp(lookTarget.z, tmp.z, 12);
+    lookTarget.x = damp(lookTarget.x, tmp.x, 16);
+    lookTarget.y = damp(lookTarget.y, tmp.y, 16);
+    lookTarget.z = damp(lookTarget.z, tmp.z, 16);
     camera.lookAt(lookTarget);
     camPos.copy(camera.position);
 
@@ -3595,6 +3861,8 @@ export function createVeyraWorld(container, opts) {
       lastNight = night;
       items.setNightFactor && items.setNightFactor(night);
       setFacadeNight(night);
+      // Street-lamp ground pools: invisible by day, warm glow after dusk.
+      if (lampGlow) { lampGlow.visible = night > 0.02; if (lampGlowMat) lampGlowMat.opacity = night * 0.7; }
     }
     // Lake ambience: mist fades with `night`, willow fronds sway in the wind, koi
     // glide, fireflies glow after dusk. (`night` is computed fresh every frame above.)
@@ -3899,9 +4167,11 @@ export function createVeyraWorld(container, opts) {
     // Sit controls (driven by the sit prompt button in WorldScreen).
     sit() { requestSit(); },
     stand() { requestStand(); },
+    // Emotes (driven by the HUD emote button + the 1/2 hotkeys).
+    emote(name) { if (player && !sitting) player.playEmote(name); },
     // Chat: show the local player's own bubble immediately (optimistic); remote
     // bubbles arrive via the presence snapshot.
-    say(text) { if (SELF_ID) say(SELF_ID, text); },
+    say(text) { console.log('[chat] api.say called, SELF_ID=', SELF_ID, 'text=', JSON.stringify(text)); if (SELF_ID) say(SELF_ID, text); },
     dispose() {
       disposed = true;
       running = false; cancelAnimationFrame(raf);

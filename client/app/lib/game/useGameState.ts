@@ -96,7 +96,7 @@ export function useGameState(): GameState {
   const saved = React.useRef<PersistedState>(loadState()).current;
 
   const [lang, setLang] = React.useState<Lang>(saved.lang || 'vi');
-  const [player, setPlayer] = React.useState<Player>(saved.player || { name: 'Veyra', hue: 184 });
+  const [player, setPlayer] = React.useState<Player>(saved.player || { name: 'Veyra', hue: 184, age: 24 });
   // Default landing is the world itself: unauthenticated players spawn OUTSIDE the
   // perimeter fence (see worldHanoi) and must pass a gate's ticket check to enter.
   const [screen, setScreen] = React.useState<ScreenName>(saved.screen || 'world');

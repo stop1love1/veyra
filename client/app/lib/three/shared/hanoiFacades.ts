@@ -536,27 +536,28 @@ function buildSpecs() {
   const shutterBrown = C(28, 0.35, 0.32);
 
   const specs = [
-    /* (a) OLD-QUARTER TUBE HOUSES — the most common; several colour variants */
-    { kind: 'tube', name: 'tube-ochre', wall: C(38, 0.4, 0.62), frame: frameDark, shutter: shutterGreen, sign: C(2, 0.5, 0.4), lit: true, litChance: 0.45 },
-    { kind: 'tube', name: 'tube-yellow', wall: C(48, 0.5, 0.68), frame: frameDark, shutter: shutterBlue, sign: C(210, 0.45, 0.4), lit: true, litChance: 0.5 },
-    { kind: 'tube', name: 'tube-faded-green', wall: C(96, 0.18, 0.6), frame: frameDark, shutter: shutterBrown, sign: C(150, 0.4, 0.34), lit: true, litChance: 0.4 },
-    { kind: 'tube', name: 'tube-faded-blue', wall: C(200, 0.2, 0.62), frame: frameDark, shutter: C(28, 0.4, 0.3), sign: C(28, 0.5, 0.42), lit: true, litChance: 0.45 },
-    { kind: 'tube', name: 'tube-faded-pink', wall: C(355, 0.28, 0.7), frame: frameDark, shutter: shutterGreen, sign: C(330, 0.45, 0.45), lit: true, litChance: 0.5 },
-    { kind: 'tube', name: 'tube-terracotta', wall: C(18, 0.45, 0.5), frame: frameDark, shutter: C(40, 0.3, 0.7), sign: C(45, 0.6, 0.5), lit: true, litChance: 0.45 },
-    { kind: 'tube', name: 'tube-mint', wall: C(160, 0.2, 0.66), frame: frameDark, shutter: C(20, 0.35, 0.3), sign: C(0, 0.5, 0.42), lit: true, litChance: 0.4 },
+    /* (a) OLD-QUARTER TUBE HOUSES — the most common; several colour variants.
+       Walls desaturated + ~6L darker than fresh paint so they read as aged patina. */
+    { kind: 'tube', name: 'tube-ochre', wall: C(38, 0.28, 0.54), frame: frameDark, shutter: shutterGreen, sign: C(2, 0.5, 0.4), lit: true, litChance: 0.45 },
+    { kind: 'tube', name: 'tube-yellow', wall: C(48, 0.34, 0.58), frame: frameDark, shutter: shutterBlue, sign: C(210, 0.45, 0.4), lit: true, litChance: 0.5 },
+    { kind: 'tube', name: 'tube-faded-green', wall: C(96, 0.13, 0.52), frame: frameDark, shutter: shutterBrown, sign: C(150, 0.4, 0.34), lit: true, litChance: 0.4 },
+    { kind: 'tube', name: 'tube-faded-blue', wall: C(200, 0.2, 0.57), frame: frameDark, shutter: C(28, 0.4, 0.3), sign: C(28, 0.5, 0.42), lit: true, litChance: 0.45 },
+    { kind: 'tube', name: 'tube-faded-pink', wall: C(355, 0.2, 0.6), frame: frameDark, shutter: shutterGreen, sign: C(330, 0.45, 0.45), lit: true, litChance: 0.5 },
+    { kind: 'tube', name: 'tube-terracotta', wall: C(18, 0.28, 0.47), frame: frameDark, shutter: C(40, 0.3, 0.7), sign: C(45, 0.6, 0.5), lit: true, litChance: 0.45 },
+    { kind: 'tube', name: 'tube-mint', wall: C(160, 0.16, 0.55), frame: frameDark, shutter: C(20, 0.35, 0.3), sign: C(0, 0.5, 0.42), lit: true, litChance: 0.4 },
 
     /* (b) FRENCH-COLONIAL SHOPHOUSES — pastel cream/yellow, arched windows */
-    { kind: 'colonial', name: 'colonial-cream', wall: C(44, 0.28, 0.78), frame: C(40, 0.12, 0.5), shutter: shutterGreen, sign: C(150, 0.35, 0.3), lit: true, litChance: 0.35 },
-    { kind: 'colonial', name: 'colonial-yellow', wall: C(46, 0.42, 0.7), frame: C(40, 0.12, 0.46), shutter: shutterBlue, sign: C(205, 0.4, 0.35), lit: true, litChance: 0.35 },
-    { kind: 'colonial', name: 'colonial-grey', wall: C(40, 0.06, 0.72), frame: C(30, 0.1, 0.42), shutter: shutterBrown, sign: C(28, 0.45, 0.4), lit: true, litChance: 0.3 },
+    { kind: 'colonial', name: 'colonial-cream', wall: C(44, 0.26, 0.7), frame: C(40, 0.12, 0.5), shutter: shutterGreen, sign: C(150, 0.35, 0.3), lit: true, litChance: 0.35 },
+    { kind: 'colonial', name: 'colonial-yellow', wall: C(46, 0.32, 0.63), frame: C(40, 0.12, 0.46), shutter: shutterBlue, sign: C(205, 0.4, 0.35), lit: true, litChance: 0.35 },
+    { kind: 'colonial', name: 'colonial-grey', wall: C(40, 0.06, 0.64), frame: C(30, 0.1, 0.42), shutter: shutterBrown, sign: C(28, 0.45, 0.4), lit: true, litChance: 0.3 },
 
     /* (c) MODERN MINI-HOTEL / GLASS — horizontal bands, reflective glass */
-    { kind: 'modern', name: 'modern-glass-blue', wall: C(210, 0.08, 0.72), frame: C(220, 0.05, 0.4), shutter: frameDark, sign: C(210, 0.4, 0.4), lit: true, litChance: 0.55 },
-    { kind: 'modern', name: 'modern-glass-warm', wall: C(35, 0.06, 0.74), frame: C(30, 0.05, 0.42), shutter: frameDark, sign: C(20, 0.5, 0.45), lit: true, litChance: 0.55 },
+    { kind: 'modern', name: 'modern-glass-blue', wall: C(210, 0.08, 0.64), frame: C(220, 0.05, 0.4), shutter: frameDark, sign: C(210, 0.4, 0.4), lit: true, litChance: 0.55 },
+    { kind: 'modern', name: 'modern-glass-warm', wall: C(35, 0.08, 0.66), frame: C(30, 0.05, 0.42), shutter: frameDark, sign: C(20, 0.5, 0.45), lit: true, litChance: 0.55 },
 
     /* (d) PLAIN RENDERED — bare concrete/wash, simple windows */
-    { kind: 'plain', name: 'plain-concrete', wall: C(30, 0.03, 0.6), frame: frameDark, shutter: frameDark, sign: C(210, 0.3, 0.4), lit: true, litChance: 0.3 },
-    { kind: 'plain', name: 'plain-wash', wall: C(40, 0.08, 0.7), frame: C(30, 0.1, 0.35), shutter: shutterBrown, sign: C(0, 0.45, 0.42), lit: true, litChance: 0.3 },
+    { kind: 'plain', name: 'plain-concrete', wall: C(30, 0.04, 0.64), frame: frameDark, shutter: frameDark, sign: C(210, 0.3, 0.4), lit: true, litChance: 0.3 },
+    { kind: 'plain', name: 'plain-wash', wall: C(40, 0.08, 0.63), frame: C(30, 0.1, 0.35), shutter: shutterBrown, sign: C(0, 0.45, 0.42), lit: true, litChance: 0.3 },
   ];
   return specs;
 }
@@ -656,9 +657,9 @@ export function createHanoiFacades(THREE_arg) {
   /* ----------------------- shared roof-detail materials ------------------- */
   // A couple of cheap shared materials reused across every roof topper.
   const parapetMat = new T.MeshStandardMaterial({ color: 0x8d8377, roughness: 0.95, metalness: 0.0 });
-  const tankMat = new T.MeshStandardMaterial({ color: 0x2f6fb0, roughness: 0.6, metalness: 0.1 }); // blue plastic water tank
+  const tankMat = new T.MeshStandardMaterial({ color: 0x4a7a98, roughness: 0.6, metalness: 0.1 }); // blue plastic water tank (desaturated)
   const boxMat = new T.MeshStandardMaterial({ color: 0x9a9286, roughness: 0.9, metalness: 0.0 });   // access box / render
-  const acMat = new T.MeshStandardMaterial({ color: 0xcfcdc6, roughness: 0.55, metalness: 0.4 });    // AC / metal
+  const acMat = new T.MeshStandardMaterial({ color: 0xbcb6ac, roughness: 0.55, metalness: 0.4 });    // AC / metal (industrial grey)
   const lineMat = new T.MeshStandardMaterial({ color: 0x3a3a3a, roughness: 0.9, metalness: 0.0 });   // laundry line
   const clothMat = new T.MeshStandardMaterial({ color: 0xc8c2b4, roughness: 0.95, metalness: 0.0, side: T.DoubleSide }); // laundry
   const tileMat = new T.MeshStandardMaterial({ color: 0x9c5236, roughness: 0.85, metalness: 0.0 });  // pitched-cap terracotta

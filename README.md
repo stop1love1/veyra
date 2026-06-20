@@ -8,6 +8,20 @@ veyra/
   server/   NestJS (TypeScript) — backend API
 ```
 
+## Chạy toàn bộ project — 1 lệnh ở root
+
+```bash
+npm run dev        # = node dev.js
+```
+
+Khởi động theo thứ tự: **MongoDB** (127.0.0.1:27017) → đợi sẵn sàng → **API** (http://localhost:3001) + **client** (http://localhost:3000). Log của 3 tiến trình gộp chung với tiền tố màu `[mongo]` / `[server]` / `[client]`. Nhấn `Ctrl+C` để dừng tất cả.
+
+Lần đầu (nếu chưa có `node_modules`):
+
+```bash
+npm run install:all
+```
+
 ## Frontend — `client/`
 
 ```bash

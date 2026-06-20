@@ -44,6 +44,10 @@ export function createComposer(renderer, scene, camera, { quality } = {}) {
       setSize() {
         /* nothing extra to resize on the passthrough path */
       },
+      setPixelRatio() {
+        /* passthrough renders straight through the renderer, whose pixel ratio the
+           caller sets directly — nothing extra to do here */
+      },
       setBloom() {
         /* no bloom without a composer — no-op */
       },
@@ -87,7 +91,7 @@ export function createComposer(renderer, scene, camera, { quality } = {}) {
   if (q.enableBloom) {
     // strength 0.25 (low), radius 0.4, threshold 0.9 (high) => only lamps /
     // sun-hit glass cross the threshold and bloom; the scene stays grounded.
-    bloomPass = new UnrealBloomPass(new THREE.Vector2(w, h), 0.25, 0.4, 0.9);
+    bloomPass = new UnrealBloomPass(new THREE.Vector2(w, h), 0.25, 0.4, 0.8);
     composer.addPass(bloomPass);
   }
 
@@ -129,6 +133,20 @@ export function createComposer(renderer, scene, camera, { quality } = {}) {
       composer.setSize(w, h);
       if (ssaoPass) ssaoPass.setSize(w, h);
       if (bloomPass) bloomPass.setSize(w, h);
+      if (fxaaPass) applyFxaaResolution(fxaaPass, w, h);
+    },
+
+    // Dynamic-resolution hook. EffectComposer caches its own pixel ratio at
+    // construction and does NOT track renderer.setPixelRatio(), so changing the
+    // backing-buffer resolution at runtime must go through composer.setPixelRatio()
+    // (which resizes RT1/RT2 + every pass to width×height×ratio). The caller sets the
+    // renderer's pixel ratio separately for the non-composed passes (e.g. Water).
+    setPixelRatio(pr) {
+      const p = Number(pr);
+      if (!Number.isFinite(p) || p <= 0) return;
+      composer.setPixelRatio(p);
+      // FXAA's resolution uniform reads renderer.getPixelRatio() (already updated by
+      // the caller), so re-derive it against the current CSS size.
       if (fxaaPass) applyFxaaResolution(fxaaPass, w, h);
     },
 

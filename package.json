@@ -1,0 +1,11 @@
+{
+  "name": "veyra-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Veyra monorepo — one command to start Mongo + NestJS API + Next.js client",
+  "scripts": {
+    "dev": "node dev.js",
+    "install:all": "npm --prefix server install && npm --prefix client install",
+    "build": "npm --prefix server run build && npm --prefix client run build"
+  }
+}

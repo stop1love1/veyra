@@ -217,10 +217,10 @@ export function createMaterials({ anisotropy = 4, envMap = null } = {}) {
   // Dark asphalt road, fine grain.
   const asphaltSet = pbrSet(
     256,
-    { scale: 18, octaves: 5, seed: 23, contrast: 0.5, tint: hsl(220, 0.03, 0.16), bias: -0.02 },
+    { scale: 18, octaves: 5, seed: 23, contrast: 0.5, tint: hsl(28, 0.03, 0.17), bias: -0.02 },
     6,
     0.8,
-    hsl(220, 0.03, 0.16),
+    hsl(28, 0.03, 0.17),
   );
   const asphalt = track(
     new THREE.MeshStandardMaterial({
@@ -236,10 +236,10 @@ export function createMaterials({ anisotropy = 4, envMap = null } = {}) {
   // Mid grey structural concrete (shared height map drives both concrete & curb).
   const concreteSet = pbrSet(
     256,
-    { scale: 7, octaves: 4, seed: 31, contrast: 0.45, tint: hsl(30, 0.02, 0.5) },
+    { scale: 7, octaves: 4, seed: 31, contrast: 0.45, tint: hsl(36, 0.05, 0.52) },
     3,
     1.0,
-    hsl(30, 0.02, 0.5),
+    hsl(36, 0.05, 0.52),
   );
   const concrete = track(
     new THREE.MeshStandardMaterial({
@@ -260,7 +260,7 @@ export function createMaterials({ anisotropy = 4, envMap = null } = {}) {
       normalMap: concreteSet.normal,
       roughness: 0.88,
       metalness: 0,
-      color: hsl(30, 0.02, 0.58),
+      color: hsl(38, 0.06, 0.66),
     }),
   );
   curb.normalScale.set(0.4, 0.4);
@@ -301,7 +301,7 @@ export function createMaterials({ anisotropy = 4, envMap = null } = {}) {
     const key = hue === undefined ? 'warm' : Math.round(hue);
     if (plasterCache.has(key)) return plasterCache.get(key);
     // Undefined hue -> warm off-white; otherwise a low-saturation muted tint.
-    const color = hue === undefined ? hsl(38, 0.1, 0.86) : hsl(hue, 0.12, 0.7);
+    const color = hue === undefined ? hsl(38, 0.1, 0.86) : hsl(hue, 0.13, 0.64);
     const m = track(
       new THREE.MeshStandardMaterial({
         map: plasterSet.albedo,
@@ -322,7 +322,7 @@ export function createMaterials({ anisotropy = 4, envMap = null } = {}) {
   // Storefront glass — reflective, slight cool tint, reads as real glass.
   const glassDark = track(
     new THREE.MeshPhysicalMaterial({
-      color: hsl(205, 0.25, 0.18),
+      color: hsl(195, 0.16, 0.24),
       metalness: 0,
       roughness: 0.05,
       transmission: 0.0, // opacity-based so it works without a backdrop pass
@@ -386,10 +386,10 @@ export function createMaterials({ anisotropy = 4, envMap = null } = {}) {
   // Tree / bush leaves — realistic muted green with leafy detail.
   const foliageSet = pbrSet(
     256,
-    { scale: 14, octaves: 4, seed: 79, contrast: 0.8, tint: hsl(110, 0.3, 0.32) },
+    { scale: 14, octaves: 4, seed: 79, contrast: 0.8, tint: hsl(96, 0.2, 0.36) },
     3,
     1.2,
-    hsl(110, 0.3, 0.32),
+    hsl(96, 0.2, 0.36),
   );
   const foliage = track(
     new THREE.MeshStandardMaterial({
@@ -398,7 +398,7 @@ export function createMaterials({ anisotropy = 4, envMap = null } = {}) {
       normalMap: foliageSet.normal,
       roughness: 0.9,
       metalness: 0.0,
-      color: hsl(110, 0.32, 0.36),
+      color: hsl(96, 0.22, 0.38),
       flatShading: false,
       side: THREE.DoubleSide,
     }),
@@ -432,7 +432,7 @@ export function createMaterials({ anisotropy = 4, envMap = null } = {}) {
   // Fountain / puddle water — glossy, subtly tinted, highly reflective.
   const water = track(
     new THREE.MeshPhysicalMaterial({
-      color: hsl(205, 0.18, 0.32),
+      color: hsl(168, 0.22, 0.34),
       metalness: 0,
       roughness: 0.08,
       transparent: true,
