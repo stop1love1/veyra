@@ -639,8 +639,29 @@ export function createVeyraWorld(container, opts) {
     camera.far = SKYLINE_OUTER + CAM_MAX + 600;
     camera.updateProjectionMatrix();
 
-    // ── GROUND — a large warm-earth plane under everything (covers the skyline) ──
-    const groundMat = new THREE.MeshStandardMaterial({ color: hsl(38, 0.05, 0.40), roughness: 1, metalness: 0 });
+    // ── GROUND — a large earth plane under everything (covers the skyline) ──
+    // Procedural packed-dirt so the open ground reads as real earth (mottled browns
+    // + grit) instead of a flat default fill. Tiled over the huge ground disc.
+    const dirtCanvas = document.createElement('canvas'); dirtCanvas.width = dirtCanvas.height = 256;
+    {
+      const g2 = dirtCanvas.getContext('2d');
+      g2.fillStyle = '#6b5236'; g2.fillRect(0, 0, 256, 256);                       // base earth
+      for (let i = 0; i < 900; i++) {                                              // soft mottling
+        const x = Math.random() * 256, y = Math.random() * 256, r = 8 + Math.random() * 40;
+        g2.fillStyle = `hsla(${28 + Math.random() * 16},${22 + Math.random() * 20}%,${16 + Math.random() * 22}%,0.18)`;
+        g2.beginPath(); g2.arc(x, y, r, 0, 7); g2.fill();
+      }
+      for (let i = 0; i < 1400; i++) {                                            // grit / pebbles
+        const x = Math.random() * 256, y = Math.random() * 256, r = 0.5 + Math.random() * 1.8;
+        g2.fillStyle = Math.random() < 0.6 ? `hsla(30,20%,${10 + Math.random() * 10}%,0.5)` : `hsla(36,16%,${48 + Math.random() * 16}%,0.4)`;
+        g2.beginPath(); g2.arc(x, y, r, 0, 7); g2.fill();
+      }
+    }
+    const dirtTex = new THREE.CanvasTexture(dirtCanvas);
+    dirtTex.wrapS = dirtTex.wrapT = THREE.RepeatWrapping; dirtTex.colorSpace = THREE.SRGBColorSpace;
+    dirtTex.repeat.set(200, 200); if (q.anisotropy) dirtTex.anisotropy = q.anisotropy;
+    ownedTextures.push(dirtTex);
+    const groundMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1, metalness: 0, map: dirtTex });
     const groundGeo = new THREE.CircleGeometry(SKYLINE_OUTER + extentR * 0.4, 96);
     ownedGeoms.push(groundGeo);
     const ground = new THREE.Mesh(groundGeo, groundMat);
@@ -1204,24 +1225,28 @@ export function createVeyraWorld(container, opts) {
       if (!pts || pts.length < 2) continue;
       const hw = (r.w && r.w > 0 ? r.w : 4) / 2;
       const pos = [];
+      const uv = [];
       const idx = [];
       let base = 0;
+      const US = 0.12;   // planar UV scale (world metres → texture units) so asphalt tiles
       for (let i = 0; i < pts.length - 1; i++) {
         const a = pts[i], b = pts[i + 1];
         const dx = b[0] - a[0], dz = b[1] - a[1];
         const len = Math.hypot(dx, dz) || 1;
         const nx = -dz / len, nz = dx / len; // unit perpendicular
         // quad: a-left, a-right, b-left, b-right (y handled by mesh position)
-        pos.push(a[0] + nx * hw, 0, a[1] + nz * hw);
-        pos.push(a[0] - nx * hw, 0, a[1] - nz * hw);
-        pos.push(b[0] + nx * hw, 0, b[1] + nz * hw);
-        pos.push(b[0] - nx * hw, 0, b[1] - nz * hw);
+        const al = [a[0] + nx * hw, a[1] + nz * hw], ar = [a[0] - nx * hw, a[1] - nz * hw];
+        const bl = [b[0] + nx * hw, b[1] + nz * hw], br = [b[0] - nx * hw, b[1] - nz * hw];
+        pos.push(al[0], 0, al[1], ar[0], 0, ar[1], bl[0], 0, bl[1], br[0], 0, br[1]);
+        // Planar XZ UVs → the asphalt grain actually tiles (was flat without UVs).
+        uv.push(al[0] * US, al[1] * US, ar[0] * US, ar[1] * US, bl[0] * US, bl[1] * US, br[0] * US, br[1] * US);
         idx.push(base, base + 2, base + 1,  base + 1, base + 2, base + 3);
         base += 4;
       }
       if (!pos.length) continue;
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
       g.setIndex(idx);
       roadGeoms.push(g);
     }
@@ -3375,6 +3400,10 @@ export function createVeyraWorld(container, opts) {
   const baseFov = camera.fov;
   let prevPx = 0, prevPz = 0, camSpeed = 0;
   const clampDist = (d) => Math.max(CAM_MIN, Math.min(CAM_MAX, d));
+  // Wall-avoidance auto-pulled the camera in/out while orbiting near buildings,
+  // which read as an unwanted "zoom on drag". Disabled: drag = pure 360° orbit,
+  // distance only changes via wheel/pinch.
+  const CAM_WALL_AVOID = false;
   const dom = renderer.domElement;
   const orbit = { pointers: new Map(), lastDist: 0 };
   const camDown = (e) => { orbit.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY }); try { dom.setPointerCapture(e.pointerId); } catch (_) {} };
@@ -3791,7 +3820,7 @@ export function createVeyraWorld(container, opts) {
     const pivotY = pp.y + 1.5;
     const hCos = Math.max(0.2, Math.cos(camElevCur));
     let wantD = camDist;
-    if (gridB) {
+    if (CAM_WALL_AVOID && gridB) {
       const sx = Math.sin(camYawCur), sz = Math.cos(camYawCur);   // player→camera (horizontal)
       const hd = camDist * hCos;
       let hit = hd;
