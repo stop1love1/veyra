@@ -967,26 +967,23 @@ export function createVeyraWorld(container, opts) {
       const wpos = [];
       const wuv = [];
       let perim = 0;
+      // ONE consistent winding for the whole footprint, from the signed area —
+      // exact for CONCAVE footprints too (the old per-edge centroid test flipped
+      // concave edges individually into see-through holes). The natural winding
+      // (A0,B0,B1) has outward horizontal normal (-ez, ex); for a positive-area
+      // (CCW) loop that points INWARD, so flip every edge.
+      let area2 = 0;
+      for (let i = 0; i < N; i++) { const p = poly[i], np = poly[(i + 1) % N]; area2 += p[0] * np[1] - np[0] * p[1]; }
+      const keepNatural = area2 < 0;
       for (let i = 0; i < N; i++) {
         const a = inset(poly[i]), b2 = inset(poly[(i + 1) % N]);
         const ax = a[0], az = a[1], bx = b2[0], bz = b2[1];
         const segLen = Math.hypot(bx - ax, bz - az);
         const u0 = perim, u1 = perim + segLen;
         // four corners: a-bottom(a0), b-bottom(b0), b-top(b1), a-top(a1)
-        // positions feed +z so the wall lands at true world z (matches the rest of
-        // the world, which builds shapes from -poly[1]); here we use raw poly z and
-        // since walls are flat quads + DoubleSide, winding is irrelevant.
-        // a0
         const A0 = [ax, 0, az], B0 = [bx, 0, bz], B1 = [bx, h, bz], A1 = [ax, h, az];
         const uA0 = [u0, 0], uB0 = [u1, 0], uB1 = [u1, h], uA1 = [u0, h];
-        // FRONT face must point OUTWARD (away from the footprint centroid) so the
-        // walls can be FrontSide-culled: when the camera clips inside a building it
-        // sees THROUGH the near wall to the street, never the hollow dark interior.
-        // The natural winding (A0,B0,B1) has horizontal normal (-ez, ex); flip the
-        // two tris when that points inward (handles CW *and* CCW OSM footprints).
-        const ex = bx - ax, ez = bz - az;
-        const mx = (ax + bx) / 2, mz = (az + bz) / 2;
-        if ((mx - cx2) * (-ez) + (mz - cz2) * ex >= 0) {
+        if (keepNatural) {
           wpos.push(...A0, ...B0, ...B1); wuv.push(...uA0, ...uB0, ...uB1);
           wpos.push(...A0, ...B1, ...A1); wuv.push(...uA0, ...uB1, ...uA1);
         } else {
@@ -1668,11 +1665,26 @@ export function createVeyraWorld(container, opts) {
   function makeTag(text, accent) {
     const cv = document.createElement('canvas'); cv.width = 256; cv.height = 64;
     const cx = cv.getContext('2d');
-    cx.fillStyle = 'rgba(8,22,24,0.82)'; cx.fillRect(6, 16, 244, 38);
-    cx.fillStyle = accent || 'rgba(21,214,180,0.95)'; cx.fillRect(6, 16, 244, 3);
-    cx.fillStyle = '#eafcf8'; cx.font = 'bold 28px system-ui, sans-serif'; cx.textAlign = 'center'; cx.textBaseline = 'middle';
     const s = String(text == null ? '' : text);
-    cx.fillText(s.length > 18 ? s.slice(0, 17) + '…' : s, 128, 37);
+    const label = s.length > 18 ? s.slice(0, 17) + '…' : s;
+    // Small, clean label: a soft rounded pill sized to the text, a tiny accent
+    // dot (keeps NPC role colour-coding) and a compact name. No harsh box/bar.
+    const fontPx = 22, dotR = 4, gap = 9, padX = 15, padY = 7;
+    cx.font = `600 ${fontPx}px system-ui, sans-serif`;
+    cx.textBaseline = 'middle';
+    const cyc = cv.height / 2;
+    const tw = Math.min(cv.width - 64, cx.measureText(label).width);
+    const bw = dotR * 2 + gap + tw + padX * 2, bh = fontPx + padY * 2;
+    const bx = (cv.width - bw) / 2, by = cyc - bh / 2;
+    cx.shadowColor = 'rgba(0,0,0,0.32)'; cx.shadowBlur = 5; cx.shadowOffsetY = 2;
+    cx.fillStyle = 'rgba(12,24,30,0.60)';
+    roundRectPath(cx, bx, by, bw, bh, bh / 2); cx.fill();
+    cx.shadowColor = 'transparent'; cx.shadowBlur = 0; cx.shadowOffsetY = 0;
+    const dotX = bx + padX + dotR;
+    cx.fillStyle = accent || 'rgba(21,214,180,0.95)';
+    cx.beginPath(); cx.arc(dotX, cyc, dotR, 0, Math.PI * 2); cx.fill();
+    cx.fillStyle = '#eafcf8'; cx.textAlign = 'left';
+    cx.fillText(label, dotX + dotR + gap, cyc + 1);
     const tex = new THREE.CanvasTexture(cv);
     tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = q.anisotropy || 1;
     ownedTextures.push(tex);
@@ -1687,8 +1699,8 @@ export function createVeyraWorld(container, opts) {
     if (nameTag) { player.group.remove(nameTag); nameTag = null; }
     if (!name) return;
     nameTag = makeTag(name, 'rgba(21,214,180,0.97)');
-    nameTag.scale.set(2.9, 0.72, 1);
-    nameTag.position.set(0, 2.25, 0);
+    nameTag.scale.set(2.3, 0.575, 1);
+    nameTag.position.set(0, 2.2, 0);
     nameTag.material.depthTest = false; nameTag.renderOrder = 12;
     player.group.add(nameTag);
   }
@@ -1716,7 +1728,7 @@ export function createVeyraWorld(container, opts) {
     av.group.rotation.y = state.rotY || 0;
     scene.add(av.group);
     const tag = state.name ? makeTag(state.name, 'rgba(120,180,255,0.97)') : null;
-    if (tag) { tag.scale.set(2.6, 0.66, 1); tag.position.set(0, 2.2, 0); tag.material.depthTest = false; tag.renderOrder = 12; av.group.add(tag); }
+    if (tag) { tag.scale.set(2.3, 0.575, 1); tag.position.set(0, 2.2, 0); tag.material.depthTest = false; tag.renderOrder = 12; av.group.add(tag); }
     const r = {
       av, group: av.group, parts: av.parts, tag,
       tx: state.x, tz: state.z, tRotY: state.rotY || 0,
@@ -1792,36 +1804,50 @@ export function createVeyraWorld(container, opts) {
   // A speech bubble drawn to a canvas sprite (sprites auto-billboard). Word-wraps
   // to ≤2 lines; overflow truncated with an ellipsis.
   function makeBubble(text) {
-    const cv = document.createElement('canvas'); cv.width = 320; cv.height = 96;
+    const cv = document.createElement('canvas'); cv.width = 340; cv.height = 128;
     const cx = cv.getContext('2d');
-    cx.font = '600 26px system-ui, sans-serif'; cx.textBaseline = 'middle';
-    // Word-wrap into up to 2 lines that fit ~300px.
+    const fontPx = 26, maxTextW = 280;
+    cx.font = `600 ${fontPx}px system-ui, sans-serif`; cx.textBaseline = 'middle';
+    // Word-wrap into up to 2 lines that fit ~maxTextW.
     const words = String(text).split(' ');
     const lines = []; let line = '';
     for (const w of words) {
       const test = line ? line + ' ' + w : w;
-      if (cx.measureText(test).width > 296 && line) { lines.push(line); line = w; if (lines.length === 2) break; }
+      if (cx.measureText(test).width > maxTextW && line) { lines.push(line); line = w; if (lines.length === 2) break; }
       else line = test;
     }
     if (lines.length < 2 && line) lines.push(line);
-    if (lines.length === 2 && cx.measureText(lines[1]).width > 296) {
-      while (lines[1].length > 1 && cx.measureText(lines[1] + '…').width > 296) lines[1] = lines[1].slice(0, -1);
+    if (lines.length === 2 && cx.measureText(lines[1]).width > maxTextW) {
+      while (lines[1].length > 1 && cx.measureText(lines[1] + '…').width > maxTextW) lines[1] = lines[1].slice(0, -1);
       lines[1] += '…';
     }
-    const padX = 16, lineH = 32;
-    const tw = Math.min(300, Math.max(...lines.map((l) => cx.measureText(l).width)));
-    const bw = tw + padX * 2, bh = lines.length * lineH + 16;
-    const bx = (cv.width - bw) / 2, by = 6;
-    cx.fillStyle = 'rgba(245,250,252,0.96)';
-    roundRectPath(cx, bx, by, bw, bh, 14); cx.fill();
-    cx.fillStyle = '#15303a'; cx.textAlign = 'center';
-    lines.forEach((l, i) => cx.fillText(l, cv.width / 2, by + 16 + i * lineH));
+    const padX = 22, padY = 13, lineH = 32, tailH = 16, tailW = 22;
+    const tw = Math.min(maxTextW, Math.max(...lines.map((l) => cx.measureText(l).width)));
+    const bw = tw + padX * 2, bh = lines.length * lineH + padY * 2;
+    const bx = (cv.width - bw) / 2, by = cv.height - tailH - bh - 8;
+    const tcx = cv.width / 2;
+    // Soft drop shadow under the whole bubble (body + tail share it).
+    cx.shadowColor = 'rgba(8,20,26,0.30)'; cx.shadowBlur = 12; cx.shadowOffsetY = 4;
+    cx.fillStyle = 'rgba(250,253,254,0.98)';
+    roundRectPath(cx, bx, by, bw, bh, 18); cx.fill();
+    cx.beginPath();                                   // little speech tail, pointing down
+    cx.moveTo(tcx - tailW / 2, by + bh - 2);
+    cx.lineTo(tcx, by + bh + tailH);
+    cx.lineTo(tcx + tailW / 2, by + bh - 2);
+    cx.closePath(); cx.fill();
+    cx.shadowColor = 'transparent'; cx.shadowBlur = 0; cx.shadowOffsetY = 0;
+    cx.lineWidth = 2; cx.strokeStyle = 'rgba(21,48,58,0.10)';   // hairline for definition
+    roundRectPath(cx, bx, by, bw, bh, 18); cx.stroke();
+    cx.fillStyle = '#16323d'; cx.textAlign = 'center';
+    lines.forEach((l, i) => cx.fillText(l, tcx, by + padY + lineH * (i + 0.5)));
     const tex = new THREE.CanvasTexture(cv);
     tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = q.anisotropy || 1;
     ownedTextures.push(tex);
     const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false, depthWrite: false });
     localMats.push(mat);
-    const spr = new THREE.Sprite(mat); spr.scale.set(3.3, 3.3 * cv.height / cv.width, 1);
+    const spr = new THREE.Sprite(mat);
+    const worldW = 3.4; spr.scale.set(worldW, worldW * cv.height / cv.width, 1);
+    spr.center.set(0.5, 0);    // anchor at the tail tip so it points to the head
     spr.renderOrder = 14;
     return spr;
   }
@@ -1840,7 +1866,7 @@ export function createVeyraWorld(container, opts) {
     const prev = bubbles.get(id);
     if (prev) { prev.group.remove(prev.sprite); }
     const sprite = makeBubble(text);
-    sprite.position.set(0, 2.95, 0);
+    sprite.position.set(0, 2.5, 0);
     targetGroup.add(sprite);
     bubbles.set(id, { sprite, group: targetGroup, until: performance.now() + BUBBLE_MS });
   }
