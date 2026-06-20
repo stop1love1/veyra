@@ -102,6 +102,7 @@ export function createVeyraStore(container, opts) {
   const matPanel = lp(0xfff6e8, { rough: 0.5, emissive: 0xffe7c0, emissiveIntensity: 0.75 });
   const matLeaf = lp(hsl(130, 0.4, 0.42), { rough: 1, flat: true });
   const matPot = lp(hsl(20, 0.4, 0.45), { rough: 0.95, flat: true });
+  const matTrim = lp(hsl(shopHue, 0.14, 0.3), { rough: 0.7, metal: 0.15, flat: true });
   // Stair + elevator kit.
   const matStep = lp(hsl(shopHue, 0.08, 0.58), { rough: 0.9, flat: true });
   const matRail = lp(hsl(shopHue, 0.14, 0.34), { rough: 0.6, metal: 0.35, flat: true });
@@ -125,9 +126,14 @@ export function createVeyraStore(container, opts) {
   const HAS_ELEVATOR = FLOORS >= 3;
 
   // ── Vertical geometry ────────────────────────────────────
-  const wallH = 4.2, SLAB = 0.3, floorH = wallH + SLAB;
+  // Roomier than before: a wider footprint + taller ceiling so floors feel airy
+  // and easy to move through. Stairs / slots / lamps / elevator below derive from
+  // these so the room can be retuned without hunting coordinates.
+  const wallH = 5.2, SLAB = 0.3, floorH = wallH + SLAB;
   const baseY = (f) => f * floorH;
-  const RX = 10.5, RZ = 11.5;
+  const RX = 13, RZ = 14.5;
+  // How far the orbit camera must stay inside the walls (spring-arm margin).
+  const CAM_MARGIN = 0.6;
 
   // ── Interior lighting (calm boutique, not a stage) ───────
   scene.add(new THREE.HemisphereLight(0xffffff, 0x3a3d42, 0.55));
@@ -136,7 +142,7 @@ export function createVeyraStore(container, opts) {
   // Per-floor warm ceiling fills (PointLights). One on floor 0 casts shadows
   // when allowed. Low tiers thin the lamp grid to keep the light count sane.
   const ceilLights = [];
-  const baseLamps = [[-5.5, -5.5], [5.5, -5.5], [-5.5, 2.5], [5.5, 2.5], [0, -1.5]];
+  const baseLamps = [[-8, -9], [8, -9], [-8, 4], [8, 4], [0, -2.5]];
   const lampPositions = (LOW ? baseLamps.slice(0, 2).concat([[0, -1.5]]) : baseLamps);
   const lampLocalY = wallH - 0.5;
   for (let f = 0; f < FLOORS; f++) {
@@ -216,6 +222,14 @@ export function createVeyraStore(container, opts) {
     // Per-floor brand sign accent plaque on the back wall.
     const brandSign = new THREE.Mesh(new THREE.BoxGeometry(4.0, 0.9, 0.12), matAccent);
     brandSign.position.set(0, fb + wallH - 0.7, -RZ + 0.22); scene.add(brandSign);
+    // Skirting trim along the wall bases (grounds the room; flat, no collision).
+    const skirtH = 0.28, skY = fb + skirtH / 2 - 0.18;
+    const skBack = new THREE.Mesh(new THREE.BoxGeometry(RX * 2, skirtH, 0.1), matTrim);
+    skBack.position.set(0, skY, -RZ + 0.18); scene.add(skBack);
+    [[-RX + 0.18, Math.PI / 2], [RX - 0.18, Math.PI / 2]].forEach(([sx, ry]) => {
+      const sk = new THREE.Mesh(new THREE.BoxGeometry(RZ * 2, skirtH, 0.1), matTrim);
+      sk.position.set(sx, skY, 0); sk.rotation.y = ry; scene.add(sk);
+    });
   }
 
   // Subtle accent rug under the floor-0 central display zone.
@@ -245,10 +259,26 @@ export function createVeyraStore(container, opts) {
     foliage.position.y = 1.15; foliage.castShadow = true; g.add(foliage);
     return g;
   }
-  [[-RX + 1, -RZ + 1], [RX - 1, -RZ + 1]].forEach(([px, pz]) => {
-    const pl = lowPolyPlant();
-    pl.position.set(px, 0, pz); pl.scale.set(1.2, 1.2, 1.2); scene.add(pl);
-  });
+  // Potted plants in the FRONT corners of every floor (back corners hold the
+  // stairs). Front corners stay clear of the central doorway gap + exit.
+  for (let f = 0; f < FLOORS; f++) {
+    const fb = baseY(f);
+    [[-RX + 1.4, RZ - 1.6], [RX - 1.4, RZ - 1.6]].forEach(([px, pz]) => {
+      const pl = lowPolyPlant();
+      pl.position.set(px, fb, pz); pl.scale.set(1.2, 1.2, 1.2); scene.add(pl);
+    });
+  }
+
+  // Floor-0 reception console against the back wall, behind the advisor (purely
+  // decorative — no collision, sits behind the NPC so it never blocks approach).
+  {
+    const console = new THREE.Group();
+    const body = new THREE.Mesh(new THREE.BoxGeometry(5.0, 1.0, 0.7), matPlinth);
+    body.position.y = 0.5; body.castShadow = true; body.receiveShadow = true; console.add(body);
+    const counter = new THREE.Mesh(new THREE.BoxGeometry(5.3, 0.12, 0.9), matPlinthTop);
+    counter.position.y = 1.02; console.add(counter);
+    console.position.set(0, 0, -RZ + 0.85); scene.add(console);
+  }
 
   // ── STAIRS ───────────────────────────────────────────────
   // One flight per gap f=0..FLOORS-2, alternating back corners so flights never
@@ -258,10 +288,10 @@ export function createVeyraStore(container, opts) {
   // can lift the player along the run (the core mechanic).
   const stairs = [];
   if (HAS_STAIRS) {
-    const STEPS = 12;
-    const flightWidth = 3.0;             // x-footprint
-    const zStartBase = -RZ + 5.0;        // low end (toward centre)
-    const zEndBase = -RZ + 0.8;          // high landing (near back wall)
+    const STEPS = 14;
+    const flightWidth = 3.2;             // x-footprint
+    const zStartBase = -RZ + 6.0;        // low end (toward centre)
+    const zEndBase = -RZ + 0.9;          // high landing (near back wall)
     const run = zStartBase - zEndBase;   // positive horizontal run along -Z
     for (let f = 0; f <= FLOORS - 2; f++) {
       const right = (f % 2 === 0);       // flight 0 → right, flight 1 → left, …
@@ -299,14 +329,17 @@ export function createVeyraStore(container, opts) {
   }
 
   // ── ELEVATOR (FLOORS>=3) ─────────────────────────────────
-  // A shaft + platform at the back-CENTER, away from the stair corners. When the
-  // player stands centered on the idle platform, after a short dwell it travels
-  // UP one floor (carrying the player), wrapping back to floor 0 after the top.
-  // Self-contained — no UI; exposes an `elevator` poi for prompts.
+  // A shaft + platform at the back-CENTER, away from the stair corners. The ride
+  // is BUTTON-DRIVEN: the player picks a target floor — either by TAPPING the 3D
+  // cabin buttons here, or via the on-screen floor panel — and the platform
+  // travels straight to that floor, carrying the player. Exposes an `elevator`
+  // poi (for the panel) and an onElevator(state) callback so the UI can mirror
+  // the live floor + lit button.
   let elevator = null;
+  const liftButtons = [];          // { mesh, floor } — tappable cabin buttons
   if (HAS_ELEVATOR) {
-    const ex = 0, ez = -RZ + 2.6;          // back-centre, clear of corner stairs
-    const half = 0.9;                      // 1.8 × 1.8 platform half-extent
+    const ex = 0, ez = -RZ + 2.8;          // back-centre, clear of corner stairs
+    const half = 0.95;                     // ~1.9 × 1.9 platform half-extent
     const topY = baseY(FLOORS - 1);
     const group = new THREE.Group(); scene.add(group);
     // Shaft corner posts spanning floor 0 → top floor.
@@ -323,20 +356,68 @@ export function createVeyraStore(container, opts) {
     const platform = new THREE.Mesh(new THREE.BoxGeometry(half * 2, 0.18, half * 2), matLiftPlate);
     platform.position.set(ex, baseY(0) + 0.0, ez);
     platform.castShadow = true; platform.receiveShadow = true; group.add(platform);
-    // Emissive ride indicator above the platform.
-    const indicator = new THREE.Mesh(new THREE.SphereGeometry(0.12, 12, 8), matBtnLit);
+    // Emissive ride indicator above the platform (own material so its pulse does
+    // not bleed into the shared lit-button material).
+    const indMat = M(new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: new THREE.Color(hsl(shopHue, 0.6, 0.5)), emissiveIntensity: 0.6 }));
+    const indicator = new THREE.Mesh(new THREE.SphereGeometry(0.12, 12, 8), indMat);
     indicator.position.set(ex, baseY(0) + 1.9, ez); group.add(indicator);
-    // Call-button box on the back panel (decorative; ride is automatic).
-    const btnBox = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.5, 0.12), matBtn);
-    btnBox.position.set(ex + half - 0.1, baseY(0) + 1.3, ez - half - 0.1); group.add(btnBox);
-    elevator = {
-      ex, ez, half, group, platform, indicator,
-      curFloor: 0,            // floor the platform currently rests at
-      state: 'idle',          // 'idle' | 'dwell' | 'moving'
-      timer: 0,               // dwell timer
-      fromY: baseY(0), toY: baseY(0), prog: 0,
-      pos: new THREE.Vector3(ex, 0, ez), trig: 2.0,
+
+    // ── Cabin floor buttons (3D, tappable) ────────────────────
+    // Vertical strip on the front-right of the shaft, facing the room (+z) so the
+    // player can see + tap them. Bottom button = floor 1. Each button carries a
+    // number decal and lights when it is the current (idle) / target (moving)
+    // floor. A backing plate frames the strip.
+    const padX = ex + half - 0.05, padZ = ez + half + 0.16;
+    const btnGap = 0.46, btnY0 = baseY(0) + 1.2;
+    const plate = new THREE.Mesh(new THREE.BoxGeometry(0.5, btnGap * FLOORS + 0.26, 0.06), matLiftPlate);
+    plate.position.set(padX, btnY0 + (FLOORS - 1) * btnGap / 2, padZ - 0.05); group.add(plate);
+    const digitMat = (n) => {
+      const cv = document.createElement('canvas'); cv.width = 64; cv.height = 64;
+      const c = cv.getContext('2d');
+      c.fillStyle = '#10141a'; c.fillRect(0, 0, 64, 64);
+      c.fillStyle = '#f4efe6'; c.textAlign = 'center'; c.textBaseline = 'middle';
+      c.font = '700 42px "Space Mono", monospace'; c.fillText(String(n), 32, 36);
+      const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace;
+      return M(new THREE.MeshBasicMaterial({ map: tex }));
     };
+    for (let i = 0; i < FLOORS; i++) {
+      const by = btnY0 + i * btnGap;
+      const btn = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.34, 0.1), matBtn);
+      btn.position.set(padX, by, padZ); group.add(btn);
+      const digit = new THREE.Mesh(new THREE.PlaneGeometry(0.26, 0.26), digitMat(i + 1));
+      digit.position.set(padX, by, padZ + 0.06); group.add(digit);
+      liftButtons.push({ mesh: btn, floor: i });
+    }
+
+    elevator = {
+      ex, ez, half, group, platform, indicator, indMat,
+      curFloor: 0,            // floor the platform currently rests at
+      state: 'idle',          // 'idle' | 'moving'
+      nextFloor: 0,           // target floor while moving
+      fromY: baseY(0), toY: baseY(0), prog: 0,
+      pos: new THREE.Vector3(ex, 0, ez), trig: 2.6,
+    };
+  }
+
+  // Fire onElevator with the current cabin state (curFloor 0-indexed).
+  function emitElevator() {
+    if (!elevator) return;
+    opts.onElevator && opts.onElevator({ curFloor: elevator.curFloor, moving: elevator.state === 'moving', floors: FLOORS });
+  }
+
+  // Drive the cabin to a target floor (0-indexed). No-op if already there, mid-
+  // ride, or out of range. Works whether the player is on the pad or merely near
+  // it — the moving branch recenters them onto the shaft and carries them.
+  function goToFloor(n) {
+    if (!elevator || elevator.state !== 'idle') return false;
+    if (n < 0 || n >= FLOORS || n === elevator.curFloor) return false;
+    elevator.fromY = baseY(elevator.curFloor);
+    elevator.toY = baseY(n);
+    elevator.nextFloor = n;
+    elevator.prog = 0;
+    elevator.state = 'moving';
+    emitElevator();
+    return true;
   }
 
   // ── Billboard label helper ───────────────────────────────
@@ -396,9 +477,9 @@ export function createVeyraStore(container, opts) {
   // Local slot layout, REPEATED per floor. The stair corner (back, one side) and
   // elevator shaft (back centre) are kept clear by choosing front/side slots.
   const slots = [
-    [-6.8, -6.5], [6.8, -6.5],
-    [-6.8, -1.5], [6.8, -1.5],
-    [-6.8, 3.5], [6.8, 3.5],
+    [-9, -6], [9, -6],
+    [-9, 0], [9, 0],
+    [-9, 6], [9, 6],
   ];
   // Spread products ~ceil(products/FLOORS) per floor. Slot index within a floor
   // = i % slots.length; floor = floor(i / perFloor) clamped to FLOORS-1.
@@ -482,7 +563,7 @@ export function createVeyraStore(container, opts) {
   const joy = stick.joy;
 
   // ── Orbit camera (drag to rotate 360°, pinch / wheel to zoom) ─
-  const orbitCam = createOrbitCamera(renderer.domElement, { yaw: 0, elev: 0.45, dist: 10, minDist: 5, maxDist: 22, minElev: 0.16, maxElev: 1.2, pinch: 0.06, wheel: 0.02 });
+  const orbitCam = createOrbitCamera(renderer.domElement, { yaw: 0, elev: 0.45, dist: 12, minDist: 5, maxDist: 18, minElev: 0.16, maxElev: 1.2, pinch: 0.06, wheel: 0.02 });
   const cam = orbitCam.cam;
 
   // ── Tactile inspect mode ─────────────────────────────────
@@ -546,6 +627,29 @@ export function createVeyraStore(container, opts) {
   dom.addEventListener('pointerup', spinUp, true);
   dom.addEventListener('pointercancel', spinUp, true);
   dom.addEventListener('wheel', spinWheel, { passive: false, capture: true });
+
+  // ── Tap-to-press for the 3D cabin buttons ────────────────
+  // Distinguish a TAP (press the elevator button) from a DRAG (rotate the
+  // orbit camera): only a near-stationary, short press raycasts the buttons.
+  // Bubble-phase so the inspect spin handlers (capture, stopPropagation while
+  // inspecting) pre-empt it; also guarded by inspect.active.
+  const ray = new THREE.Raycaster();
+  const tapNDC = new THREE.Vector2();
+  let tapStart = null;
+  const onTapDown = (e) => { tapStart = { x: e.clientX, y: e.clientY, id: e.pointerId, t: performance.now() }; };
+  const onTapUp = (e) => {
+    const ts = tapStart; tapStart = null;
+    if (!ts || ts.id !== e.pointerId || inspect.active || !liftButtons.length) return;
+    const moved = Math.hypot(e.clientX - ts.x, e.clientY - ts.y);
+    if (moved > 8 || performance.now() - ts.t > 500) return;  // drag / long-press → not a tap
+    const r = dom.getBoundingClientRect();
+    tapNDC.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+    ray.setFromCamera(tapNDC, camera);
+    const hit = ray.intersectObjects(liftButtons.map((b) => b.mesh), false)[0];
+    if (hit) { const b = liftButtons.find((x) => x.mesh === hit.object); if (b) goToFloor(b.floor); }
+  };
+  dom.addEventListener('pointerdown', onTapDown);
+  dom.addEventListener('pointerup', onTapUp);
 
   function enterInspect(id) {
     const entry = productById[id];
@@ -654,21 +758,12 @@ export function createVeyraStore(container, opts) {
     }
 
     // ── Vertical follow: ELEVATOR ────────────────────────────
+    // Button-driven (goToFloor): idle until the player picks a floor, then ride
+    // straight to it carrying the player. No auto-cycle.
     if (elevator) {
       const el = elevator;
-      const onPad = Math.abs(pp.x - el.ex) <= el.half - 0.15 && Math.abs(pp.z - el.ez) <= el.half - 0.15;
       if (el.state === 'idle') {
         el.platform.position.y = baseY(el.curFloor);
-        if (onPad && !inspecting) { el.state = 'dwell'; el.timer = 0; }
-      } else if (el.state === 'dwell') {
-        el.timer += dt;
-        if (!onPad) { el.state = 'idle'; el.timer = 0; }
-        else if (el.timer >= 0.4) {
-          // Begin a ride: up one floor, wrapping to floor 0 after the top.
-          const next = el.curFloor >= FLOORS - 1 ? 0 : el.curFloor + 1;
-          el.fromY = baseY(el.curFloor); el.toY = baseY(next);
-          el.nextFloor = next; el.prog = 0; el.state = 'moving';
-        }
       } else if (el.state === 'moving') {
         el.prog = Math.min(1, el.prog + dt / 1.3);
         const e2 = el.prog < 0.5 ? 2 * el.prog * el.prog : 1 - Math.pow(-2 * el.prog + 2, 2) / 2; // easeInOutQuad
@@ -681,11 +776,15 @@ export function createVeyraStore(container, opts) {
         if (el.prog >= 1) {
           el.curFloor = el.nextFloor;
           currentFloor = el.curFloor;
-          el.state = 'idle'; el.timer = 0;
+          el.state = 'idle';
+          emitElevator();            // notify UI: arrived, no longer moving
         }
       }
       el.indicator.position.y = el.platform.position.y + 1.9;
-      el.indicator.material.emissiveIntensity = el.state === 'moving' ? 1.4 + Math.sin(t * 10) * 0.5 : 0.6;
+      el.indMat.emissiveIntensity = el.state === 'moving' ? 1.4 + Math.sin(t * 10) * 0.5 : 0.6;
+      // Light the active floor button (target while moving, else current).
+      const activeFloor = el.state === 'moving' ? el.nextFloor : el.curFloor;
+      liftButtons.forEach((b) => { b.mesh.material = b.floor === activeFloor ? matBtnLit : matBtn; });
     }
 
     // Determine currentFloor from pp.y when on flat ground (not mid-stair / ride).
@@ -723,10 +822,30 @@ export function createVeyraStore(container, opts) {
     }
 
     // ── camera follow (orbit) pose — now tracks pp.y ─────────
-    const offX = cam.dist * Math.cos(cam.elev) * Math.sin(cam.yaw);
-    const offZ = cam.dist * Math.cos(cam.elev) * Math.cos(cam.yaw);
-    const offY = cam.dist * Math.sin(cam.elev);
-    followPos.set(pp.x + offX, pp.y + offY, pp.z + offZ);
+    // Spring-arm against the room box: orbiting must never push the camera
+    // through/behind a side wall. The room is a known AABB, so analytically cap
+    // the orbit distance so the camera point stays inside the walls (inset by
+    // CAM_MARGIN). This is the fix for "camera gets stuck on walls" — instead of
+    // clipping, it pulls in toward the player and rotation stays smooth.
+    const cdX = Math.cos(cam.elev) * Math.sin(cam.yaw);
+    const cdY = Math.sin(cam.elev);
+    const cdZ = Math.cos(cam.elev) * Math.cos(cam.yaw);
+    let camDist = cam.dist;
+    // Lateral wall slabs (player x/z are already clamped inside, so the ray
+    // origin is interior). Take the nearest forward wall crossing.
+    if (Math.abs(cdX) > 1e-4) {
+      const t = ((cdX > 0 ? RX - CAM_MARGIN : -RX + CAM_MARGIN) - pp.x) / cdX;
+      if (t >= 0) camDist = Math.min(camDist, t);
+    }
+    if (Math.abs(cdZ) > 1e-4) {
+      const t = ((cdZ > 0 ? RZ - CAM_MARGIN : -RZ + CAM_MARGIN) - pp.z) / cdZ;
+      if (t >= 0) camDist = Math.min(camDist, t);
+    }
+    camDist = Math.max(2.0, camDist - 0.1);
+    followPos.set(pp.x + cdX * camDist, pp.y + cdY * camDist, pp.z + cdZ * camDist);
+    // Keep the camera below the current floor's ceiling.
+    const ceilY = baseY(currentFloor) + wallH - 0.4;
+    if (followPos.y > ceilY) followPos.y = ceilY;
     followLook.set(pp.x * 0.6, pp.y + 1.4, pp.z * 0.6 - 0.5);
 
     if (inspecting && inspect.entry) {
@@ -789,11 +908,19 @@ export function createVeyraStore(container, opts) {
   };
   document.addEventListener('visibilitychange', onVisibility);
 
+  // Publish the initial elevator state so the UI knows the floor count + start
+  // floor before the player has touched anything.
+  emitElevator();
+
   return {
     // ── Tactile inspect API (unchanged) ────────────────────
     inspect(id) { enterInspect(id); },
     endInspect() { leaveInspect(); },
     setInspectColor(hex) { setInspectColorHex(hex); },
+
+    // ── Elevator API ───────────────────────────────────────
+    floors: FLOORS,
+    goToFloor(n) { return goToFloor(n); },
 
     /**
      * Diegetically stock a new product onto the next free slot/floor.
@@ -819,6 +946,8 @@ export function createVeyraStore(container, opts) {
       dom.removeEventListener('pointerup', spinUp, true);
       dom.removeEventListener('pointercancel', spinUp, true);
       dom.removeEventListener('wheel', spinWheel, true);
+      dom.removeEventListener('pointerdown', onTapDown);
+      dom.removeEventListener('pointerup', onTapUp);
       kbd.dispose(); stick.dispose(); orbitCam.dispose();
       post.dispose();
       ownMats.forEach((m) => m.dispose());

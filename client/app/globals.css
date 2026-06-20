@@ -568,6 +568,17 @@ button:focus-visible,a:focus-visible,input:focus-visible,
 .v-enter-sub{color:rgba(234,252,248,.6);font-size:9px;}
 .v-enter-name{color:#fff;font-weight:700;font-size:15.5px;line-height:1.2;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .v-enter-card .v-btn{flex:none;}
+/* Elevator floor picker (reuses the glass prompt card). */
+.v-floor-pick{padding:9px 12px 9px 16px;}
+.v-floor-btns{display:flex;gap:7px;flex:none;}
+.v-floor-btn{width:38px;height:38px;border-radius:13px;border:1px solid rgba(234,252,248,.18);
+  background:rgba(255,255,255,.07);color:#eafcf8;font-weight:700;font-size:15px;
+  font-family:'Space Mono',monospace;cursor:pointer;transition:background .16s,transform .12s,border-color .16s;}
+.v-floor-btn:hover:not(:disabled){background:rgba(255,255,255,.16);transform:translateY(-1px);}
+.v-floor-btn:active:not(:disabled){transform:translateY(0);}
+.v-floor-btn.is-cur{background:var(--accent,#36e0c0);color:#0a1412;border-color:transparent;}
+.v-floor-btn:disabled{cursor:default;opacity:.55;}
+.v-floor-btn.is-cur:disabled{opacity:1;}
 
 /* ═══ GATE ═══════════════════════════════════════════════ */
 .v-gate{background:#16383c;}

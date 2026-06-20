@@ -94,6 +94,10 @@ export const STR: Record<string, Localized> = {
   backToPlaza:    { vi: 'Ra quảng trường',         en: 'Back to plaza' },
   leave:          { vi: 'Ra',                        en: 'Leave' },
   view:           { vi: 'Xem',                       en: 'View' },
+  elevator:       { vi: 'Thang máy',               en: 'Elevator' },
+  pickFloor:      { vi: 'Chọn tầng',               en: 'Pick a floor' },
+  floor:          { vi: 'Tầng',                     en: 'Floor' },
+  elevatorMoving: { vi: 'Đang di chuyển…',         en: 'Moving…' },
   codNote:        { vi: 'Thanh toán khi nhận',      en: 'Cash on delivery' },
   voucherOn:      { vi: 'Đang dùng',               en: 'Applied' },
   // flash toasts

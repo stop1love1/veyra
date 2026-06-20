@@ -17,6 +17,14 @@ interface StoreApi {
   endInspect: () => void;
   setInspectColor: (hex: string) => void;
   addProduct: (p: { id: string; name: string; price: string; color: string }) => boolean;
+  goToFloor: (n: number) => boolean;
+  floors: number;
+}
+
+interface ElevatorState {
+  curFloor: number;
+  moving: boolean;
+  floors: number;
 }
 
 interface StoreProximity {
@@ -84,6 +92,7 @@ function Store3D({ g }: { g: Game }) {
   const ref = React.useRef<HTMLDivElement | null>(null);
   const api3d = React.useRef<StoreApi | null>(null);
   const [near, setNear] = React.useState<StoreProximity | null>(null);
+  const [elevator, setElevator] = React.useState<ElevatorState | null>(null);
   const [ready, setReady] = React.useState(false);
   const shop = VEYRA.SHOPS.find((s) => s.id === (g.params.shop || 'aria'))!;
   const npc = VEYRA.NPCS[shop.npc];
@@ -104,6 +113,7 @@ function Store3D({ g }: { g: Game }) {
         npc: { name: npc.name, hue: npc.hue },
         products: seed.map((p) => ({ id: p.id, name: VEYRA.tx(p.name, g.lang), price: VEYRA.money(p.price), color: p.colors[0] })),
         onProximity: (s: StoreProximity | null) => setNear(s),
+        onElevator: (s: ElevatorState) => setElevator(s),
       }) as StoreApi;
       // Register the inspect bridge for the whole 3D-store lifetime so the
       // globally-rendered ProductPanel knows (on its very first render) that it
@@ -152,11 +162,17 @@ function Store3D({ g }: { g: Game }) {
   }, [mng, g.lang]);
 
   let prompt: EnterPrompt | null = null;
-  if (near) {
+  // The elevator gets its own floor-picker card (below), not the generic CTA.
+  if (near && near.type !== 'elevator') {
     if (near.type === 'exit') prompt = { sub: g.t('exit'), title: g.t('backToPlaza'), cta: g.t('leave'), act: () => g.go('world') };
     else if (near.type === 'npc') prompt = { sub: VEYRA.tx(npc.role, g.lang), title: npc.name, cta: g.t('talkTo'), act: () => g.openNPC(shop.npc) };
     else { const p = near.id ? findProduct(mng.products, near.id) : undefined; prompt = { sub: g.t('shelf'), title: p ? VEYRA.tx(p.name, g.lang) : '', cta: g.t('view'), act: () => near.id && g.openProduct(near.id) }; }
   }
+
+  // elevator state carries the floor count (emitted on store creation), so we
+  // never need to read the imperative api ref during render.
+  const floorCount = elevator?.floors ?? 0;
+  const showFloorPick = near?.type === 'elevator' && floorCount > 1;
 
   return (
     <div className="v-screen v-world3d">
@@ -185,6 +201,29 @@ function Store3D({ g }: { g: Game }) {
               <div className="v-enter-name">{prompt.title}</div>
             </div>
             <Btn variant="primary" size="md" icon="chevR" onClick={prompt.act}>{prompt.cta}</Btn>
+          </Glass>
+        </div>
+      )}
+      {showFloorPick && (
+        <div className="v-enter-prompt">
+          <Glass dark className="v-enter-card v-floor-pick">
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div className="v-mono v-enter-sub">{g.t('elevator')}</div>
+              <div className="v-enter-name">{elevator?.moving ? g.t('elevatorMoving') : g.t('pickFloor')}</div>
+            </div>
+            <div className="v-floor-btns">
+              {Array.from({ length: floorCount }).map((_, i) => (
+                <button
+                  key={i}
+                  className={`v-floor-btn${elevator?.curFloor === i ? ' is-cur' : ''}`}
+                  disabled={!!elevator?.moving || elevator?.curFloor === i}
+                  onClick={() => api3d.current?.goToFloor(i)}
+                  aria-label={`${g.t('floor')} ${i + 1}`}
+                >
+                  {i + 1}
+                </button>
+              ))}
+            </div>
           </Glass>
         </div>
       )}
