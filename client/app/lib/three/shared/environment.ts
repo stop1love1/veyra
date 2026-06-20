@@ -47,7 +47,7 @@ export function createEnvironment(renderer, scene, { quality, envHdrUrl } = {}) 
   const starPos = new Float32Array(STAR_N * 3);
   for (let i = 0; i < STAR_N; i++) {
     const theta = Math.random() * Math.PI * 2;
-    const phi = Math.acos(Math.random() * 0.9 + 0.02);   // mostly upper hemisphere
+    const phi = Math.acos(Math.random() * 0.98 + 0.02);  // full upper hemisphere incl. the zenith (no bald patch overhead)
     starPos[i * 3] = STAR_R * Math.sin(phi) * Math.cos(theta);
     starPos[i * 3 + 1] = STAR_R * Math.cos(phi);
     starPos[i * 3 + 2] = STAR_R * Math.sin(phi) * Math.sin(theta);
@@ -56,6 +56,11 @@ export function createEnvironment(renderer, scene, { quality, envHdrUrl } = {}) 
   const starMat = new THREE.PointsMaterial({ color: 0xfff4e0, size: 2.2, sizeAttenuation: false, transparent: true, opacity: 0, depthWrite: false, fog: false });
   const stars = new THREE.Points(starGeo, starMat);
   stars.renderOrder = -2; stars.matrixAutoUpdate = false;
+  // Put the starfield on layer 1 so the lake's Water reflection (its internal
+  // mirror camera only ever renders the default layer 0) never picks up the stars
+  // — reflected starpoints littered the jade surface as bright specks. The MAIN
+  // camera enables layer 1, so the stars still show in the actual night sky.
+  stars.layers.set(1);
   scene.add(stars);
 
   const moonGeo = new THREE.SphereGeometry(42, 20, 16);
@@ -147,6 +152,7 @@ export function createEnvironment(renderer, scene, { quality, envHdrUrl } = {}) 
   // ── Day/night state (shared by setTimeOfDay + setWeather via applyLighting) ──
   let curDaylight = 1;      // 0 = full night … 1 = full day (soft twilight band)
   let curOvercastV = 0;     // remembered overcast so time changes keep weather mood
+  let curMurkV = 0;         // remembered cloud+rain murk → veils the stars/moon in bad weather
   const _horizonCol = new THREE.Color(0xff8a40); // low-sun warm
   const _zenithCol = new THREE.Color(0xfff6ea);  // high-sun neutral-warm
   const _nightFog = new THREE.Color(0x141e2c);   // deep blue night haze (lifted so lamp pools read)
@@ -172,10 +178,14 @@ export function createEnvironment(renderer, scene, { quality, envHdrUrl } = {}) 
       * THREE.MathUtils.lerp(0.52, 1.0, curDaylight)
       * THREE.MathUtils.lerp(1.0, 0.85, overcast);
     scene.environmentIntensity = THREE.MathUtils.lerp(0.12, 1.0, curDaylight);
-    // Fade the starfield + moon in as night falls.
+    // Fade the starfield + moon in as night falls, then VEIL them by the current
+    // weather: a clear sky shows every star, heavy overcast/rain hides them (cloud
+    // cover blocks the view of the night sky). `curMurkV` = overcast + rain.
     const nightOpacity = Math.pow(1 - curDaylight, 1.4);
-    starMat.opacity = nightOpacity * 0.9;
-    moonMat.opacity = nightOpacity;
+    const starClarity = THREE.MathUtils.clamp(1 - curMurkV * 1.25, 0, 1); // 0 at murk≈0.8
+    starMat.opacity = nightOpacity * 0.9 * starClarity;
+    // Moon survives thin cloud a little longer than the stars (still a glow behind haze).
+    moonMat.opacity = nightOpacity * THREE.MathUtils.clamp(1 - curMurkV * 0.85, 0, 1);
   }
 
   // ── Time of day ───────────────────────────────────────────────────────────
@@ -228,6 +238,7 @@ export function createEnvironment(renderer, scene, { quality, envHdrUrl } = {}) 
     const rain = THREE.MathUtils.clamp(w.rain ?? 0, 0, 1);
     const murk = Math.min(1, overcast + rain * 0.6);
     curOvercastV = overcast;
+    curMurkV = murk;
 
     // Hazier, milkier sky as it clouds over.
     skyU.turbidity.value = THREE.MathUtils.lerp(baseSky.turbidity, 12, overcast);

@@ -162,6 +162,15 @@ export const STR: Record<string, Localized> = {
   playingAs:      { vi: 'Đang chơi',               en: 'Playing as' },
   loggedOut:      { vi: 'Đã đăng xuất',           en: 'Signed out' },
   roleAdmin:      { vi: 'Quản trị',               en: 'Admin' },
+  // "Use my location" — place the in-game character from the device's real GPS.
+  useMyLocation:  { vi: 'Dùng vị trí của tôi',    en: 'Use my location' },
+  locRequesting:  { vi: 'Đang lấy vị trí…',       en: 'Getting your location…' },
+  locPlaced:      { vi: 'Đã đưa bạn tới vị trí thực của bạn', en: 'Placed you at your real location' },
+  locSnapped:     { vi: 'Bạn đang ở ngoài khu vực bản đồ — đã đặt ở rìa gần nhất', en: "You're outside the map — placed at the nearest edge" },
+  locDenied:      { vi: 'Bạn đã từ chối quyền truy cập vị trí', en: 'Location permission was denied' },
+  locFailed:      { vi: 'Không lấy được vị trí của bạn', en: "Couldn't get your location" },
+  locUnsupported: { vi: 'Thiết bị không hỗ trợ định vị', en: 'Location is not supported on this device' },
+  locNotReady:    { vi: 'Bản đồ chưa sẵn sàng',   en: 'The map is not ready yet' },
 
   // ── Product form ──
   productName:    { vi: 'Tên sản phẩm',           en: 'Product name' },

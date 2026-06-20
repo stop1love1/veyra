@@ -1,10 +1,11 @@
-// @ts-nocheck -- Hoan Kiem AMBIENCE: dawn mist, falling leaves, koi, fireflies.
+// @ts-nocheck -- Hoan Kiem AMBIENCE: weeping willows, koi, fireflies.
 //
 // hanoiAmbience.ts — the moving "soul" of the lake that static geometry can't give:
-//   • dawn/dusk/night MIST drifting over Hoan Kiem,
-//   • autumn LEAVES tumbling on the wind around the player,
-//   • a few KOI gliding just on the jade surface,
+//   • weeping WILLOWS leaning over the jade water, fronds swaying in the wind,
+//   • a few KOI gliding just on the jade surface (with expanding ripples),
 //   • warm FIREFLIES / lantern-motes along the shore at night.
+// (A drifting MIST point-cloud was removed: from above its sparse sprites read as
+//  scattered bright dots on the water rather than continuous fog.)
 //
 //   createHanoiAmbience(THREE?, { quality }) -> {
 //     build({ scene, lakeCx, lakeCz, lakeR, lakeNorthZ }),
@@ -36,7 +37,7 @@ export function createHanoiAmbience(THREEarg, { quality } = {}) {
   const UP = new T.Vector3(0, 1, 0);
   const rnd = (i, salt = 0) => { const s = Math.sin((i + 1) * 12.9898 + salt * 78.233) * 43758.5453; return s - Math.floor(s); };
 
-  // Soft radial sprite (white core → transparent edge), shared by mist + fireflies.
+  // Soft radial sprite (white core → transparent edge) for the firefly motes.
   function softSprite(size = 64) {
     const c = (typeof document !== 'undefined') ? document.createElement('canvas') : new OffscreenCanvas(size, size);
     c.width = c.height = size;
@@ -51,7 +52,6 @@ export function createHanoiAmbience(THREEarg, { quality } = {}) {
   }
 
   // ── Live effect state (filled by build, read by update) ──────────────────
-  let mist = null;          // { pts, mat }
   let koi = null;           // { mesh, n, params, y }
   let ripples = null;       // { meshes, st, spawnAcc, counter } — expanding rings behind the koi
   let fireflies = null;     // { pts, mat }
@@ -66,33 +66,6 @@ export function createHanoiAmbience(THREEarg, { quality } = {}) {
     const lakePoly = ctx.lakePoly || null;       // real shore polygon (for willow placement)
     const circles = ctx.circles || null;          // collision sink (willow trunks)
     const sprite = softSprite();
-
-    // ── 1. MIST over the lake ────────────────────────────────────────────
-    // A flat-ish cloud of large soft sprites just above the water. We never rewrite
-    // the points per-frame — update() only spins the whole object slowly + sets
-    // opacity from the night factor, so this is effectively free.
-    {
-      const N = tier === 'high' ? 90 : tier === 'mid' ? 60 : 36;
-      const pos = new Float32Array(N * 3);
-      for (let i = 0; i < N; i++) {
-        const a = rnd(i, 1) * Math.PI * 2;
-        const rr = Math.sqrt(rnd(i, 2)) * lakeR * 0.95;
-        pos[i * 3] = Math.cos(a) * rr;
-        pos[i * 3 + 1] = 1.2 + rnd(i, 3) * 2.2;       // hover 1–3.5 m over the water
-        pos[i * 3 + 2] = Math.sin(a) * rr;
-      }
-      const geo = G(new T.BufferGeometry());
-      geo.setAttribute('position', new T.BufferAttribute(pos, 3));
-      const mat = M(new T.PointsMaterial({
-        map: sprite, color: 0xcfe0e6, size: 22, sizeAttenuation: true,
-        transparent: true, opacity: 0, depthWrite: false, blending: T.NormalBlending, fog: false,
-      }));
-      const pts = new T.Points(geo, mat);
-      pts.position.set(lakeCx, 0, lakeCz);
-      pts.frustumCulled = false; pts.renderOrder = 3;
-      scene.add(pts); roots.push(pts);
-      mist = { pts, mat };
-    }
 
     // ── 2. WEEPING WILLOWS along the shore (cây liễu rủ) ─────────────────
     // The signature of Hoan Kiem: willows leaning over the jade water, long fronds
@@ -319,12 +292,6 @@ export function createHanoiAmbience(THREEarg, { quality } = {}) {
     const windDir = ctx && ctx.windDir ? ctx.windDir : 0;
     const night = Math.max(0, Math.min(1, ctx && ctx.night != null ? ctx.night : 0));
 
-    // 1. MIST: spin the whole cloud slowly + fade with the night factor (free).
-    if (mist) {
-      mist.pts.rotation.y = t * 0.012;
-      mist.mat.opacity = night * 0.5 + 0.03;   // a faint wisp even at midday
-    }
-
     // 2. WILLOWS: drive the frond-sway shader (cheap — three uniform writes).
     if (willows) {
       swayU.uTime.value = t;
@@ -396,7 +363,7 @@ export function createHanoiAmbience(THREEarg, { quality } = {}) {
     for (const m of mats) { try { m.dispose(); } catch (_) {} }
     for (const x of texes) { try { x.dispose(); } catch (_) {} }
     geoms.length = 0; mats.length = 0; texes.length = 0;
-    mist = koi = ripples = fireflies = willows = null;
+    koi = ripples = fireflies = willows = null;
   }
 
   return { build, update, dispose };

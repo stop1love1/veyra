@@ -8,7 +8,7 @@ import { GATE_HUES, GATE_STYLES } from '../../features/gate/GuardDialogue';
 import type { Game } from '../../lib/game/types';
 import type { CSSVars } from '../../lib/css';
 
-export function AccountModal({ g, onClose }: { g: Game; onClose: () => void }) {
+export function AccountModal({ g, onClose, onUseLocation }: { g: Game; onClose: () => void; onUseLocation?: () => void }) {
   const u = g.auth.user;
   const [name, setName] = React.useState(g.player.name);
   const [hue, setHue] = React.useState(g.player.hue);
@@ -68,6 +68,14 @@ export function AccountModal({ g, onClose }: { g: Game; onClose: () => void }) {
               ))}
             </div>
           </div>
+
+          {/* Place the character at the device's real GPS location (one-shot). The
+              browser prompts for permission on tap; close the modal so the move shows. */}
+          {onUseLocation && (
+            <Btn variant="soft" size="md" icon="pin" onClick={() => { onUseLocation(); onClose(); }}>
+              {g.t('useMyLocation')}
+            </Btn>
+          )}
         </div>
 
         <div className="v-acctm-foot">

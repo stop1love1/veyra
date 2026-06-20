@@ -48,6 +48,7 @@ import { createHanoiItems } from './shared/hanoiItems';
 import { createHanoiAmbience } from './shared/hanoiAmbience';
 import { resolveTeleport } from './shared/devMapGeom';
 import { ribbonEdges } from './shared/roadGeom';
+import { gpsToWorld, isInsideMap } from './shared/geoLocate';
 
 // Split a road network at the fence circle (radius R, centred on origin). Returns
 // { inside, outside } — two road lists ([{pts,w}]) where every polyline lies
@@ -128,6 +129,10 @@ export function createVeyraWorld(container, opts) {
   // and never sits closer than a couple of metres, so 0.5 clips nothing.
   const camera = new THREE.PerspectiveCamera(52, W() / H(), 0.5, 4500);
   camera.position.set(0, 40, 120);
+  // See the night starfield (layer 1). It lives on its own layer so the lake's
+  // Water reflection (mirror camera = layer 0 only) doesn't mirror the stars onto
+  // the jade surface; the main view still renders them.
+  camera.layers.enable(1);
 
   // ── Environment (sky/sun/IBL/tonemap/fog) ────────────────
   // REALISTIC Hanoi: the sun is driven by the REAL current Hanoi local time and the
@@ -169,7 +174,7 @@ export function createVeyraWorld(container, opts) {
   const density = q.propDensity;
   const facades = createHanoiFacades(THREE);
   const items = createHanoiItems(THREE);
-  // Atmospheric life on the lake (dawn mist, leaves, koi, fireflies). Self-contained
+  // Atmospheric life on the lake (willows, koi, fireflies). Self-contained
   // module: owns its geom/mat/texture pools + the roots it adds; freed in dispose().
   const ambience = createHanoiAmbience(THREE, { quality: q });
   const itemGroups = [];  // item root groups (geometry freed by items.dispose())
@@ -1637,7 +1642,7 @@ export function createVeyraWorld(container, opts) {
       scene.add(birdMesh); ownedInstanced.push(birdMesh);
     }
 
-    // ─────────────── Lake ambience: mist + willows + koi + fireflies ──────
+    // ─────────────── Lake ambience: willows + koi + fireflies ──────
     // `lakePoly` lets the weeping willows trace the real shore; `circles` receives
     // their trunk collision (added before buildGrid() below).
     ambience.build({ scene, lakeCx, lakeCz, lakeR, lakeNorthZ, lakePoly, circles });
@@ -1696,6 +1701,9 @@ export function createVeyraWorld(container, opts) {
       pois: (data && Array.isArray(data.pois)) ? data.pois : [],
       barriers: (data && Array.isArray(data.barriers)) ? data.barriers : [],
       spawn: { x: SPAWN.x, z: SPAWN.z },
+      // Geo origin so a real GPS fix can be projected into this local frame
+      // (matches the equirectangular projection scripts/gen-hanoi.js baked in).
+      center: (data && data.center) ? data.center : { lat0: 21.0287, lon0: 105.8524 },
     };
 
     // ── Animated hero NPCs (Kenney Mini-Characters, CC0): a handful of real,
@@ -4240,8 +4248,8 @@ export function createVeyraWorld(container, opts) {
       // Street-lamp ground pools: invisible by day, warm glow after dusk.
       if (lampGlow) { lampGlow.visible = night > 0.02; if (lampGlowMat) lampGlowMat.opacity = night * 0.7; }
     }
-    // Lake ambience: mist fades with `night`, willow fronds sway in the wind, koi
-    // glide, fireflies glow after dusk. (`night` is computed fresh every frame above.)
+    // Lake ambience: willow fronds sway in the wind, koi glide, fireflies glow
+    // after dusk. (`night` is computed fresh every frame above.)
     ambience.update(t, dt, { camPos, windAmt, windDir, night });
     if (birdMesh) {
       for (let i = 0; i < birdParams.length; i++) {
@@ -4677,6 +4685,17 @@ export function createVeyraWorld(container, opts) {
       snapCam = true;          // instant camera cut (no pan across the map)
       posAccum = 0;
       opts.onPos && opts.onPos({ x: r.x, z: r.z, entered });
+    },
+    // Place the player from a real GPS fix: project (lat,lon) into the map's local
+    // frame, then teleport there. teleport() clamps to the play disc, so a fix
+    // OUTSIDE the map snaps to the nearest rim. Returns { ok, inside } so the UI
+    // can tell "placed at your real spot" from "you're outside, snapped to edge".
+    geoTeleport(lat, lon) {
+      if (!player || !worldMap) return { ok: false, inside: false };
+      const { x, z } = gpsToWorld(lat, lon, worldMap.center);
+      const inside = isInsideMap(x, z, worldMap.bounds.r);
+      this.teleport(x, z);
+      return { ok: true, inside };
     },
     setPlayerName(name) { setNameTag(name); },
     setLang(names) {

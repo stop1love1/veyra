@@ -13,7 +13,7 @@ function MapBtn({ onMap, label }: { onMap: () => void; label: string }) {
   );
 }
 
-export function HudTop({ g, onMap }: { g: Game; onMap?: () => void }) {
+export function HudTop({ g, onMap, onUseLocation }: { g: Game; onMap?: () => void; onUseLocation?: () => void }) {
   const [acct, setAcct] = useState(false);
   const u = g.auth.user;
   const mapLabel = g.lang === 'en' ? 'Teleport map' : 'Bản đồ dịch chuyển';
@@ -61,7 +61,7 @@ export function HudTop({ g, onMap }: { g: Game; onMap?: () => void }) {
         <Coin value={g.coins} />
         <LangChip g={g} dark inline />
       </div>
-      {acct && <AccountModal g={g} onClose={() => setAcct(false)} />}
+      {acct && <AccountModal g={g} onClose={() => setAcct(false)} onUseLocation={onUseLocation} />}
     </div>
   );
 }

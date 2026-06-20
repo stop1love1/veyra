@@ -66,6 +66,9 @@ function World3D({ g }: { g: Game }) {
     getMapSnapshot?: DevMapApi['getMapSnapshot'];
     getPlayerPose?: DevMapApi['getPlayerPose'];
     teleport?: DevMapApi['teleport'];
+    // Place the player from a real GPS fix; { inside } says whether the fix landed
+    // within the map (true) or was snapped to the nearest rim (false).
+    geoTeleport?: (lat: number, lon: number) => { ok: boolean; inside: boolean };
     net?: {
       snapshot: (states: unknown[]) => void;
       playerLeft: (id: string) => void;
@@ -95,6 +98,28 @@ function World3D({ g }: { g: Game }) {
     getPlayerPose: () => worldApi.current?.getPlayerPose?.() ?? null,
     teleport: (x, z) => { worldApi.current?.teleport?.(x, z); },
   }), []);
+
+  // "Use my location": read the device's real GPS once (browser shows the native
+  // permission prompt), project it into the map frame, and move the character.
+  // Outside the map → teleport() snaps to the nearest rim. All outcomes flash.
+  const useMyLocation = React.useCallback(() => {
+    if (typeof navigator === 'undefined' || !navigator.geolocation) {
+      g.flash(g.t('locUnsupported'));
+      return;
+    }
+    g.flash(g.t('locRequesting'));
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const res = worldApi.current?.geoTeleport?.(pos.coords.latitude, pos.coords.longitude);
+        if (!res || !res.ok) { g.flash(g.t('locNotReady')); return; }
+        g.flash(res.inside ? g.t('locPlaced') : g.t('locSnapped'));
+      },
+      (err) => {
+        g.flash(err.code === err.PERMISSION_DENIED ? g.t('locDenied') : g.t('locFailed'));
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 },
+    );
+  }, [g]);
 
   // Send the chat field's text: optimistic local bubble + broadcast, then close.
   const sendChat = React.useCallback(() => {
@@ -232,7 +257,7 @@ function World3D({ g }: { g: Game }) {
       <div className="v-3d-canvas" ref={ref} />
       {!ready && <div className="v-3d-loading"><Loader label={g.t('loadingWorld')} /></div>}
       {/* Dev/admin teleport map: the trigger sits beside the avatar in HudTop. */}
-      <HudTop g={g} onMap={canDevMap ? () => setMapOpen(true) : undefined} />
+      <HudTop g={g} onMap={canDevMap ? () => setMapOpen(true) : undefined} onUseLocation={useMyLocation} />
       {canDevMap && mapOpen && (
         <DevMap api={devMapApi} lang={g.lang} onClose={() => setMapOpen(false)} />
       )}
