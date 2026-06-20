@@ -3847,8 +3847,9 @@ export function createVeyraWorld(container, opts) {
           }
         }
       }
-      // Sit just before the nearest wall — never beyond it (no clip), small floor.
-      if (hit < hd) wantD = Math.min(camDist, Math.max(0.35, (hit - 0.4) / hCos));
+      // Sit just before the nearest wall — never beyond it (no clip). Floor at 1.6 m
+      // so the camera can't be pulled INSIDE the avatar (body radius ~0.5 m).
+      if (hit < hd) wantD = Math.min(camDist, Math.max(1.6, (hit - 0.4) / hCos));
     }
     // Pull in smoothly (no jarring zoom-snap, but quick enough to avoid clipping),
     // ease back out slowly (no pop).
@@ -3864,14 +3865,21 @@ export function createVeyraWorld(container, opts) {
 
     // Camera = head pivot + orbit offset; ALWAYS look back at the head so the
     // player stays framed no matter how close the wall-avoidance forces it.
-    const offX = camDcur * Math.cos(camElevCur) * Math.sin(camYawCur);
-    const offZ = camDcur * Math.cos(camElevCur) * Math.cos(camYawCur);
-    const offY = camDcur * Math.sin(camElevCur);
+    // Camera POSITION uses a floored elevation so it never drops below the head and
+    // into the avatar; "looking up" is done by raising the LOOK TARGET (below), not
+    // by sinking the camera into the player.
+    const posElev = Math.max(camElevCur, 0.05);
+    const offX = camDcur * Math.cos(posElev) * Math.sin(camYawCur);
+    const offZ = camDcur * Math.cos(posElev) * Math.cos(camYawCur);
+    const offY = camDcur * Math.sin(posElev);
     camTarget.set(pp.x + offX, pivotY + offY, pp.z + offZ);
-    if (camTarget.y < 0.4) camTarget.y = 0.4;     // ground/lake clamp (low → lets the view tilt up)
+    if (camTarget.y < 0.5) camTarget.y = 0.5;     // ground/lake clamp
     camera.position.lerp(camTarget, Math.min(1, dt * 9));
-    if (camera.position.y < 0.4) camera.position.y = 0.4;
-    tmp.set(pp.x, pivotY, pp.z);
+    if (camera.position.y < 0.5) camera.position.y = 0.5;
+    // Drag DOWN past the camera floor (camElev → negative) lifts the look point high
+    // above the head so the view tilts UP toward the sky, camera staying put.
+    const lookLift = Math.max(0, 0.05 - camElevCur) * camDcur * 10;
+    tmp.set(pp.x, pivotY + lookLift, pp.z);
     if (!lookInit) { lookTarget.copy(tmp); lookInit = true; }
     lookTarget.x = damp(lookTarget.x, tmp.x, 16);
     lookTarget.y = damp(lookTarget.y, tmp.y, 16);
