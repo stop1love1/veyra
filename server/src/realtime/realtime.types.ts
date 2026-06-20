@@ -10,6 +10,7 @@ export interface PlayerState {
   hue: number;
   style: string;
   age: number; // character age (drives the remote avatar's proportions/face)
+  avatarUrl: string; // Ready Player Me GLB URL ('' = procedural)
   authed: boolean;
   x: number;
   z: number;
@@ -27,6 +28,7 @@ export interface JoinPayload {
   hue?: number;
   style?: string;
   age?: number;
+  avatarUrl?: string;
   authed?: boolean;
 }
 

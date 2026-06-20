@@ -1,0 +1,17 @@
+{
+  "_readme": "Fill each URL with a Ready Player Me / Mixamo .glb, then run `node scripts/fetch-rpm-assets.js` to vendor them into public/models/rpm/. Animation clips: https://github.com/readyplayerme/animation-library (export/convert the masculine|feminine GLBs). `default.glb` is a fallback/NPC avatar (any RPM export URL works). Empty URLs are skipped — the app loads from the RPM CDN at runtime and the world falls back to the procedural avatar when a clip is missing, so this step is optional but makes the world offline-capable.",
+  "files": {
+    "default.glb": "",
+    "animations/idle.glb": "",
+    "animations/walk.glb": "",
+    "animations/run.glb": "",
+    "animations/sit.glb": "",
+    "animations/wave.glb": "",
+    "animations/dance.glb": "",
+    "animations/bow.glb": "",
+    "animations/clap.glb": "",
+    "animations/point.glb": "",
+    "animations/arms-crossed.glb": "",
+    "animations/think.glb": ""
+  }
+}

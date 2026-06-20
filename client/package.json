@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "copy-draco": "node scripts/copy-draco.js",
+    "predev": "node scripts/copy-draco.js",
+    "prebuild": "node scripts/copy-draco.js",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",

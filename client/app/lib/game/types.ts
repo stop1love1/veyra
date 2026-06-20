@@ -38,8 +38,11 @@ export interface Player {
   hue: number;
   skin?: number;
   style?: string;
-  /** Character age (6–70). Drives body proportions + face in the 3D avatar. */
+  /** Character age (6–70). Drives body proportions + face in the procedural avatar. */
   age?: number;
+  /** Ready Player Me GLB URL. When set, the world renders this rigged avatar
+   *  (procedural is the fallback). Synced to other players via presence. */
+  avatarUrl?: string;
 }
 
 export interface CartLine {
