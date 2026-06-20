@@ -88,7 +88,71 @@ function greenKind(tags) {
   return 'lawn';
 }
 
+function transform(elements, opts) {
+  const { lat0, lon0, tagR } = opts;
+  const { toX, toZ } = projector(lat0, lon0);
+  const tagR2 = tagR * tagR;
+  const buildings = [], roads = [], trees = [], greens = [], waters = [], pois = [], barriers = [];
+
+  for (const el of elements) {
+    const tags = el.tags || {};
+
+    // POINT features (nodes)
+    if (el.type === 'node') {
+      if (tags.natural === 'tree') { trees.push([toX(el.lon), toZ(el.lat)]); continue; }
+      const k = poiKind(tags);
+      if (k) { const x = toX(el.lon), z = toZ(el.lat); if (x * x + z * z <= tagR2) pois.push({ x, z, kind: k, ...(tags.name ? { name: tags.name } : {}) }); }
+      continue;
+    }
+
+    // Water multipolygon relation: stitch OUTER member ways into rings.
+    if (el.type === 'relation' && tags.natural === 'water' && el.members) {
+      for (const mb of el.members) {
+        if (mb.type !== 'way' || mb.role !== 'outer' || !mb.geometry || mb.geometry.length < 3) continue;
+        const ring = mb.geometry.map((g) => [toX(g.lon), toZ(g.lat)]);
+        if (area2(ring) > 200) waters.push(ring);
+      }
+      continue;
+    }
+
+    if (el.type !== 'way' || !el.geometry || el.geometry.length < 2) continue;
+    const poly = el.geometry.map((g) => [toX(g.lon), toZ(g.lat)]);
+
+    if (tags.building) {
+      if (poly.length < 3) continue;
+      const [cx, cz] = centroid(poly);
+      const rec = { poly, h: buildingHeight(tags, cx, cz) };
+      if (cx * cx + cz * cz <= tagR2) { const t = buildingTags(tags); if (t) rec.tags = t; }
+      buildings.push(rec);
+    } else if (tags.highway) {
+      const w = roadWidth(tags);
+      if (w > 0) { const rec = { pts: poly, w }; const nm = roadName(tags), cl = roadClass(tags); if (nm) rec.name = nm; if (cl) rec.cls = cl; roads.push(rec); }
+    } else if (tags.barrier) {
+      const [cx, cz] = centroid(poly);
+      if (cx * cx + cz * cz <= tagR2) barriers.push({ pts: poly, kind: tags.barrier === 'wall' ? 'wall' : tags.barrier === 'hedge' ? 'hedge' : 'fence' });
+    } else if (tags.amenity === 'fountain' || tags.water === 'fountain') {
+      const [cx, cz] = centroid(poly);
+      if (cx * cx + cz * cz <= tagR2) pois.push({ x: cx, z: cz, kind: 'fountain', ...(tags.name ? { name: tags.name } : {}) });
+    } else if (tags.natural === 'water') {
+      if (poly.length >= 3) waters.push(poly);
+    } else if (tags.leisure || tags.landuse) {
+      if (poly.length < 3) continue;
+      greens.push({ poly, kind: greenKind(tags) });
+    }
+  }
+
+  // Lake = largest near-origin water polygon; force it to water[0] (see gen-hanoi notes).
+  const R = Math.max(tagR, 700);
+  const inDisc = (poly) => poly.every((p) => Math.hypot(p[0], p[1]) <= R * 1.6);
+  const nearOrigin = (poly) => { const [cx, cz] = centroid(poly); return Math.hypot(cx, cz) < 600; };
+  const clean = waters.filter(inDisc).sort((a, b) => area2(b) - area2(a));
+  const lakeIdx = clean.findIndex((p) => nearOrigin(p) && area2(p) > 40000);
+  if (lakeIdx > 0) { const [lk] = clean.splice(lakeIdx, 1); clean.unshift(lk); }
+
+  return { buildings, roads, trees, greens, water: clean, pois, barriers };
+}
+
 module.exports = {
   projector, area2, centroid, buildingHeight, roadWidth,
-  roadName, roadClass, buildingTags, poiKind, greenKind,
+  roadName, roadClass, buildingTags, poiKind, greenKind, transform,
 };
