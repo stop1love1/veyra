@@ -750,6 +750,28 @@ export function createVeyraWorld(container, opts) {
     ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; scene.add(ground);
     localMats.push(groundMat);
 
+    // CITY-CORE PAVING BASE — a continuous stone floor over the fenced city. The roads
+    // and per-street sidewalks are drawn as separate ribbons that leave gaps at junctions
+    // and between plots; on bare dirt those gaps read as fragmented holes. This neutral
+    // paved layer sits just above the dirt and just below the greens (0.06) / roads
+    // (0.14) / sidewalks (0.22), so all of those still draw on top — only the leftover
+    // gaps fall back to "paved", giving the dense old-quarter a continuous paved ground.
+    // Same cobblestone as the sidewalks, with WORLD-PLANAR UVs (x,z * 0.125 — identical
+    // to the sidewalk slabs' UVs) so the stone pattern is continuous and ALIGNED across
+    // the base and every sidewalk/strip on top; pieces never look like mismatched patches.
+    const cityPaveMat = mats.paving.clone();
+    cityPaveMat.polygonOffset = true; cityPaveMat.polygonOffsetFactor = 1; cityPaveMat.polygonOffsetUnits = 1;
+    localMats.push(cityPaveMat);
+    const cityPaveGeo = new THREE.CircleGeometry(fenceR, 72); cityPaveGeo.rotateX(-Math.PI / 2);
+    {
+      const pa = cityPaveGeo.attributes.position, ua = new Float32Array(pa.count * 2);
+      for (let v = 0; v < pa.count; v++) { ua[v * 2] = pa.getX(v) * 0.125; ua[v * 2 + 1] = pa.getZ(v) * 0.125; }
+      cityPaveGeo.setAttribute('uv', new THREE.Float32BufferAttribute(ua, 2));
+    }
+    ownedGeoms.push(cityPaveGeo);
+    const cityPave = new THREE.Mesh(cityPaveGeo, cityPaveMat);
+    cityPave.position.y = 0.05; cityPave.receiveShadow = true; scene.add(cityPave);
+
     // Fog pushed OUT so the distant skyline reads clearly. The environment.setWeather()
     // already tinted/positioned the fog for the current sky mood; we only widen the
     // base distances to the real city extent, then let applyFog() nudge them by the
@@ -1138,11 +1160,13 @@ export function createVeyraWorld(container, opts) {
         }
       }
 
-      // ── ROOF TYPE: seeded choice between a pitched terracotta hip roof and a
-      // flat cap. Most low tube-houses (and a few mid ones) get a tiled hip roof
-      // tracing the true footprint; everything tall stays flat (with clutter).
+      // ── ROOF TYPE: height-driven to match the REAL Old Quarter skyline, not a
+      // flat coin-flip. From above, Phố Cổ today is mostly flat concrete roofs with
+      // stainless water tanks; terracotta pitched roofs survive on the genuinely LOW
+      // old shophouses (≈1-3 floors), with only the odd 4-5 floor rebuild keeping a
+      // tiled top. Tall buildings are always flat. (Heights are real OSM data.)
       const rseed = hash01(cx2 * 1.7 + 9.1, cz2 * 1.3 - 4.2);
-      const pitched = (h <= 16 && rseed < 0.62) || (h > 16 && h <= 24 && rseed < 0.22);
+      const pitched = (h <= 10 && rseed < 0.82) || (h > 10 && h <= 15 && rseed < 0.16);
 
       if (pitched) {
         // footprint bbox → roof height (capped, scaled by the smaller span)
@@ -1154,16 +1178,40 @@ export function createVeyraWorld(container, opts) {
         const bw = maxx - minx, bd = maxz - minz;
         if (bw > 0 && bd > 0) {
           const roofH = Math.max(1.6, Math.min(4, Math.min(bw, bd) * 0.32));
-          // eave ring = ORIGINAL footprint at y=h, expanded ~6% outward for a small
-          // overhang past the walls. Each footprint edge → one triangle to the apex
-          // at the centroid (h + roofH). Positions are world-space (x, y, z).
-          const apexX = cx2, apexY = h + roofH, apexZ = cz2;
+          // Proper HIP roof with a RIDGE, not a single-apex pyramid: the ridge runs
+          // along the LONG axis through the centroid with length = longSpan-shortSpan
+          // (textbook hip-roof geometry). Square footprints → ridge length 0 → the
+          // old pyramid; long narrow tube-house footprints → a real terracotta ridge,
+          // the signature Old-Quarter rooftop. Each footprint vertex projects onto the
+          // ridge line (clamped to its length) and lifts to ridgeY; each eave edge
+          // becomes a sloped quad (a, b, ridge-b, ridge-a) — collapsing to a triangle
+          // at the hip ends. Eaves expand ~6% outward for a small overhang.
+          const alongX = bw >= bd;
+          const longSpan = alongX ? bw : bd, shortSpan = alongX ? bd : bw;
+          const halfRidge = Math.max(0, (longSpan - shortSpan) / 2);
+          const ridgeY = h + roofH;
+          const ridgePt = (px, pz) => {
+            let t = alongX ? px - cx2 : pz - cz2;
+            if (t > halfRidge) t = halfRidge; else if (t < -halfRidge) t = -halfRidge;
+            return alongX ? [cx2 + t, ridgeY, cz2] : [cx2, ridgeY, cz2 + t];
+          };
           const tpos = [];
           for (let i = 0; i < N; i++) {
             const a = poly[(i - 1 + N) % N], b3 = poly[i];
             const aX = a[0] + (a[0] - cx2) * 0.06, aZ = a[1] + (a[1] - cz2) * 0.06;
             const bX = b3[0] + (b3[0] - cx2) * 0.06, bZ = b3[1] + (b3[1] - cz2) * 0.06;
-            tpos.push(aX, h, aZ, bX, h, bZ, apexX, apexY, apexZ);
+            const ra = ridgePt(aX, aZ), rb = ridgePt(bX, bZ);
+            // Winding mirrors the WALLS build (keepNatural): the natural fan
+            // (a, b, rb)+(a, rb, ra) faces up/outward only for a CW (area2<0) loop;
+            // CCW footprints need each triangle reversed, else the FrontSide tile
+            // material culls the slope (the missing/broken-roof bug).
+            if (keepNatural) {
+              tpos.push(aX, h, aZ, bX, h, bZ, rb[0], rb[1], rb[2]);
+              tpos.push(aX, h, aZ, rb[0], rb[1], rb[2], ra[0], ra[1], ra[2]);
+            } else {
+              tpos.push(rb[0], rb[1], rb[2], bX, h, bZ, aX, h, aZ);
+              tpos.push(ra[0], ra[1], ra[2], rb[0], rb[1], rb[2], aX, h, aZ);
+            }
           }
           const tg = new THREE.BufferGeometry();
           tg.setAttribute('position', new THREE.Float32BufferAttribute(tpos, 3));
@@ -1256,21 +1304,47 @@ export function createVeyraWorld(container, opts) {
     // topper to the closest few. Capped on LOW tier for the budget.
     if (buildList.length) {
       const detailCap = q.tier === 'low' ? 80 : Math.min(250, buildList.length);
+      // full ranked list (nearest the lake first) — the detail loop takes the head,
+      // the widespread-tank pass below sweeps the tail.
       const ranked = buildList
         .map((b) => {
           let x = 0, z = 0; for (const p of b.poly) { x += p[0]; z += p[1]; }
           const cx2 = x / b.poly.length, cz2 = z / b.poly.length;
-          return { b, d: (cx2 - lakeCx) ** 2 + (cz2 - lakeCz) ** 2 };
+          return { b, cx2, cz2, d: (cx2 - lakeCx) ** 2 + (cz2 - lakeCz) ** 2 };
         })
-        .sort((a, c) => a.d - c.d)
-        .slice(0, detailCap);
-      for (const e of ranked) {
+        .sort((a, c) => a.d - c.d);
+      const detailed = new Set();
+      for (const e of ranked.slice(0, detailCap)) {
         const b = e.b;
         // Rooftop clutter (water tank / AC) only reads on FLAT roofs — skip the
         // buildings that got a pitched tiled roof.
         if (pitchedSet.has(b.poly)) continue;
         const rd = facades.buildRoofDetail(b.poly, b.h || 7, hash01(b.poly[0][0], b.poly[0][1]));
-        if (rd) { scene.add(rd); itemGroups.push(rd); }
+        if (rd) { scene.add(rd); itemGroups.push(rd); detailed.add(b.poly); }
+      }
+      // ── WIDESPREAD ROOFTOP TANKS: real Hanoi roofs are a sea of inox/blue water
+      // tanks far past the lake core. The per-building detail loop is draw-call
+      // capped, so blanket the OTHER flat roofs with instanced tanks (≤3 draw calls
+      // total). ~55% prevalence, nearest-lake first, skipped on the LOW budget tier.
+      if (q.tier !== 'low') {
+        const spots = [];
+        const tankCap = 3500;
+        for (const e of ranked) {
+          const b = e.b;
+          if (pitchedSet.has(b.poly) || detailed.has(b.poly)) continue;
+          let minx = Infinity, maxx = -Infinity, minz = Infinity, maxz = -Infinity;
+          for (const p of b.poly) {
+            if (p[0] < minx) minx = p[0]; if (p[0] > maxx) maxx = p[0];
+            if (p[1] < minz) minz = p[1]; if (p[1] > maxz) maxz = p[1];
+          }
+          if (Math.min(maxx - minx, maxz - minz) < 3) continue; // too small for a tank
+          const seed = hash01(b.poly[0][0] * 1.3 + 2.1, b.poly[0][1] * 0.9 - 5.7);
+          if (seed > 0.55) continue;                            // ~55% of flat roofs
+          spots.push({ x: e.cx2, z: e.cz2, y: b.h || 7, seed });
+          if (spots.length >= tankCap) break;
+        }
+        const tankMeshes = facades.buildRoofTankField(spots);
+        for (const tm of tankMeshes) { scene.add(tm); itemGroups.push(tm); }
       }
     }
     // (drawCalls === number of non-empty façade buckets, ≤ 14, for all buildings.)
@@ -1459,9 +1533,7 @@ export function createVeyraWorld(container, opts) {
         return false;
       };
 
-      const sPos = [], sIdx = [], sUV = [];   // sidewalk slabs (paving) + planar UVs for the stone map
-      const kPos = [], kIdx = [];   // kerb faces (curb)
-      const lPos = [], lIdx = [];   // lane markings (paint)
+      const lPos = [], lIdx = [];   // lane markings + crosswalk paint
       const quad = (P, I, ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz) => {
         const base = P.length / 3;
         P.push(ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz);
@@ -1493,12 +1565,6 @@ export function createVeyraWorld(container, opts) {
         const wide = hw >= 3;        // centre dashes only on real carriageways, not alleys
         let arc = 0;                 // running arc-length for the dash pattern
 
-        // Miter-join edges so the kerb tracks the asphalt edge exactly through
-        // bends (and the pavement closes up on the outside of curves too). Inner
-        // edge sits on the road edge (hw); outer edge is the sidewalk back (hw+SW).
-        const innerE = ribbonEdges(pts, hw);
-        const outerE = ribbonEdges(pts, hw + SW);
-
         for (let i = 0; i < pts.length - 1; i++) {
           const a = pts[i], b = pts[i + 1];
           const dx = b[0] - a[0], dz = b[1] - a[1];
@@ -1506,28 +1572,10 @@ export function createVeyraWorld(container, opts) {
           const tx = dx / len, tz = dz / len;   // unit tangent
           const nx = -tz, nz = tx;              // left normal
 
-          // Kerb + pavement on BOTH sides of the segment. s=+1 → left edges,
-          // s=-1 → right edges (ribbonEdges mirrors them through the centreline).
-          for (const s of [1, -1]) {
-            const inA = s > 0 ? innerE.left[i] : innerE.right[i];
-            const inB = s > 0 ? innerE.left[i + 1] : innerE.right[i + 1];
-            const outA = s > 0 ? outerE.left[i] : outerE.right[i];
-            const outB = s > 0 ? outerE.left[i + 1] : outerE.right[i + 1];
-            const ix0 = inA[0], iz0 = inA[1];     // road edge, A
-            const ix1 = inB[0], iz1 = inB[1];     // road edge, B
-            const ox0 = outA[0], oz0 = outA[1];   // sidewalk outer, A
-            const ox1 = outB[0], oz1 = outB[1];   // sidewalk outer, B
-            const mx = (ix0 + ix1 + ox0 + ox1) * 0.25, mz = (iz0 + iz1 + oz0 + oz1) * 0.25;
-            if (inBldg(mx, mz)) continue;       // pavement would sit inside a building → skip
-            // Skip the inner (kerb) point too: drop pavement that crosses another street.
-            const kmx = (ix0 + ix1) * 0.5, kmz = (iz0 + iz1) * 0.5;
-            if (onOtherCarriageway(mx, mz, r) || onOtherCarriageway(kmx, kmz, r)) continue;
-            // Vertical kerb face (asphalt → kerb top) along the road edge.
-            quad(kPos, kIdx, ix0, ROAD_Y, iz0, ix1, ROAD_Y, iz1, ix1, KERB_Y, iz1, ix0, KERB_Y, iz0);
-            // Flat sidewalk slab behind the kerb (planar XZ UVs → ~2 m stone tiles).
-            quad(sPos, sIdx, ix0, KERB_Y, iz0, ix1, KERB_Y, iz1, ox1, KERB_Y, oz1, ox0, KERB_Y, oz0);
-            sUV.push(ix0 * 0.125, iz0 * 0.125, ix1 * 0.125, iz1 * 0.125, ox1 * 0.125, oz1 * 0.125, ox0 * 0.125, oz0 * 0.125);
-          }
+          // (Per-segment raised kerbs + sidewalk slabs were removed: along curves and
+          // at junctions the independent quads overlapped into mismatched rectangles.
+          // The continuous, world-aligned cobblestone CITY-PAVING BASE now IS the
+          // pedestrian surface, so the carriageway just sits on it cleanly.)
 
           // Dashed centre line: march the segment, ON for 2.4 m then OFF for 3.0 m.
           if (wide) {
@@ -1550,14 +1598,12 @@ export function createVeyraWorld(container, opts) {
         }
       }
 
-      // ── JUNCTION CORNERS + CROSSWALKS (rework steps 2 & 4) ──────────────────
-      // The per-street sidewalks are cut at junctions (above), leaving dark corner
-      // gaps. Rebuild the corners: at each shared node, fan a kerb-height paving ring
-      // around the junction but leave the road MOUTHS open. Then stripe a zebra
-      // crosswalk across each WIDE incident street just past the node.
-      const jPave = [];   // RingGeometry sectors → one merged junction-paving mesh
+      // ── CROSSWALKS (rework step 4) ─────────────────────────────────────────
+      // Stripe a zebra crosswalk across each WIDE incident street just past every
+      // junction. (Junction sidewalk corners are handled by the continuous cobblestone
+      // CITY-PAVING BASE under everything — separate raised corner rings only created
+      // mismatched, misaligned cobblestone patches, so they were removed.)
       {
-        const TAU = Math.PI * 2;
         const jnodes = new Map();
         for (const r of roadList) {
           const pts = r.pts; if (!pts || pts.length < 2) continue;
@@ -1573,24 +1619,9 @@ export function createVeyraWorld(container, opts) {
             if (nf) n.dirs.push({ a: Math.atan2(nf[1] - p[1], nf[0] - p[0]), hw: rhw });
           }
         }
-        const mouthAt = (n, ang) => {
-          for (const d of n.dirs) {
-            let da = ((ang - d.a + Math.PI) % TAU + TAU) % TAU - Math.PI;
-            if (Math.abs(da) < Math.atan2(d.hw, n.hw * 0.85) + 0.12) return true;
-          }
-          return false;
-        };
         for (const n of jnodes.values()) {
           if (n.deg < 2 || n.hw < 0.8 || inBldg(n.x, n.z)) continue;
-          // Step 2: paving ring sectors in the corners (skip the open road mouths).
-          const K = 24, ri = n.hw * 0.85, ro = n.hw + SW;
-          for (let s = 0; s < K; s++) {
-            if (mouthAt(n, ((s + 0.5) / K) * TAU)) continue;
-            const rg = new THREE.RingGeometry(ri, ro, 1, 1, (s / K) * TAU, TAU / K);
-            rg.rotateX(-Math.PI / 2); rg.translate(n.x, KERB_Y, n.z);
-            jPave.push(rg);
-          }
-          // Step 4: a zebra band across each wide incident street, just past the node.
+          // A zebra band across each wide incident street, just past the node.
           for (const d of n.dirs) {
             if (d.hw < 3) continue;
             const tx = Math.cos(d.a), tz = Math.sin(d.a), nxw = -tz, nzw = tx;
@@ -1615,44 +1646,14 @@ export function createVeyraWorld(container, opts) {
         return g;
       };
       const addStatic = (mesh) => { mesh.matrixAutoUpdate = false; mesh.updateMatrix(); scene.add(mesh); };
-      // Sidewalk + kerb get DEDICATED materials with a strong negative polygonOffset
-      // so they always win the z-test over the asphalt (offset -2) they border —
-      // killing the dark z-fighting seam that ran along the road/kerb boundary.
-      if (sPos.length) {
-        const g = mkGeo(sPos, sIdx);
-        g.setAttribute('uv', new THREE.Float32BufferAttribute(sUV, 2));
-        const swMat = mats.paving.clone();
-        swMat.polygonOffset = true; swMat.polygonOffsetFactor = -6; swMat.polygonOffsetUnits = -6;
-        localMats.push(swMat);
-        const m = new THREE.Mesh(g, swMat);
-        m.receiveShadow = true; addStatic(m);
-      }
-      if (kPos.length) {
-        const kerbMat = mats.curb.clone();
-        kerbMat.polygonOffset = true; kerbMat.polygonOffsetFactor = -6; kerbMat.polygonOffsetUnits = -6;
-        localMats.push(kerbMat);
-        const m = new THREE.Mesh(mkGeo(kPos, kIdx), kerbMat);
-        m.castShadow = false; m.receiveShadow = true; addStatic(m);
-      }
+      // Sidewalk slabs + kerbs are no longer emitted (the cobblestone base is the
+      // continuous pedestrian surface); only the lane/crosswalk paint remains here.
       if (lPos.length) {
         // Worn off-white road paint; polygonOffset so it never z-fights the asphalt.
         const lineMat = new THREE.MeshStandardMaterial({ color: hsl(46, 0.10, 0.74), roughness: 0.7, metalness: 0 });
         lineMat.polygonOffset = true; lineMat.polygonOffsetFactor = -4; lineMat.polygonOffsetUnits = -4;
         localMats.push(lineMat);
         const m = new THREE.Mesh(mkGeo(lPos, lIdx), lineMat); addStatic(m);
-      }
-      // Junction corner paving (merged ring sectors) — DoubleSide so it reads from any
-      // angle, strong polygonOffset so it wins over the asphalt junction discs beneath.
-      if (jPave.length) {
-        const merged = mergeGeometries(jPave, false);
-        for (const g of jPave) g.dispose();
-        if (merged) {
-          ownedGeoms.push(merged);
-          const jm = mats.paving.clone();
-          jm.side = THREE.DoubleSide; jm.polygonOffset = true; jm.polygonOffsetFactor = -6; jm.polygonOffsetUnits = -6;
-          localMats.push(jm);
-          const mesh = new THREE.Mesh(merged, jm); mesh.receiveShadow = true; addStatic(mesh);
-        }
       }
     }
 

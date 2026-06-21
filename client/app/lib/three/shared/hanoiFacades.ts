@@ -658,12 +658,13 @@ export function createHanoiFacades(THREE_arg) {
   // A couple of cheap shared materials reused across every roof topper.
   const parapetMat = new T.MeshStandardMaterial({ color: 0x8d8377, roughness: 0.95, metalness: 0.0 });
   const tankMat = new T.MeshStandardMaterial({ color: 0x4a7a98, roughness: 0.6, metalness: 0.1 }); // blue plastic water tank (desaturated)
+  const tankInoxMat = new T.MeshStandardMaterial({ color: 0xc9ccce, roughness: 0.28, metalness: 0.85 }); // stainless-steel (inox) tank — THE iconic Hanoi rooftop fixture
   const boxMat = new T.MeshStandardMaterial({ color: 0x9a9286, roughness: 0.9, metalness: 0.0 });   // access box / render
   const acMat = new T.MeshStandardMaterial({ color: 0xbcb6ac, roughness: 0.55, metalness: 0.4 });    // AC / metal (industrial grey)
   const lineMat = new T.MeshStandardMaterial({ color: 0x3a3a3a, roughness: 0.9, metalness: 0.0 });   // laundry line
   const clothMat = new T.MeshStandardMaterial({ color: 0xc8c2b4, roughness: 0.95, metalness: 0.0, side: T.DoubleSide }); // laundry
   const tileMat = new T.MeshStandardMaterial({ color: 0x9c5236, roughness: 0.85, metalness: 0.0 });  // pitched-cap terracotta
-  ownedMats.push(parapetMat, tankMat, boxMat, acMat, lineMat, clothMat, tileMat);
+  ownedMats.push(parapetMat, tankMat, tankInoxMat, boxMat, acMat, lineMat, clothMat, tileMat);
 
   // shared unit geometries (cloned/scaled per use, never mutated)
   const unitBox = new T.BoxGeometry(1, 1, 1);
@@ -769,7 +770,8 @@ export function createHanoiFacades(THREE_arg) {
       // stand on a little steel frame (a thin box) + the cylindrical tank
       const fx = jx(), fz = jz();
       addBox(fx, fz, 1.1, 0.5, 1.1, acMat, h + 0.55);
-      addCyl(fx, fz, 0.45, 1.0, tankMat, h + 1.05);
+      // inox steel dominates modern Hanoi roofs; blue plastic is the older minority
+      addCyl(fx, fz, 0.45, 1.0, rng() < 0.62 ? tankInoxMat : tankMat, h + 1.05);
     }
 
     /* ---- rooftop access box / stairwell head ---- */
@@ -828,6 +830,45 @@ export function createHanoiFacades(THREE_arg) {
     return group;
   }
 
+  /**
+   * Widespread rooftop water tanks as InstancedMesh — cheap blanket coverage for
+   * the thousands of flat-roof buildings the per-building detail loop skips (it is
+   * capped for the draw-call budget). Real Hanoi rooftops are a sea of these, so
+   * the skyline needs them far beyond the lake core. `spots` is [{x,z,y,seed}]
+   * (roof centroid in world metres, roof height, seed01). Returns ≤3 InstancedMesh
+   * (steel frame + inox tanks + blue tanks) — one draw call each — or [].
+   */
+  function buildRoofTankField(spots) {
+    if (!spots || !spots.length) return [];
+    const tankGeo = new T.CylinderGeometry(0.45, 0.45, 1.0, 12);
+    const frameGeo = new T.BoxGeometry(1.1, 0.5, 1.1);
+    ownedGeoms.push(tankGeo, frameGeo);
+    const inox = [], blue = [];
+    for (const s of spots) ((((s.seed * 1e6) | 0) % 100) < 62 ? inox : blue).push(s);
+    const meshes = [];
+    const dummy = new T.Object3D();
+    const mk = (geo, mat, list, yOff) => {
+      if (!list.length) return;
+      const im = new T.InstancedMesh(geo, mat, list.length);
+      im.castShadow = true; im.receiveShadow = true;
+      im.frustumCulled = false; // instances span the whole city — don't cull the set as one (its geometry bbox sits at the origin)
+      for (let i = 0; i < list.length; i++) {
+        const s = list[i];
+        dummy.position.set(s.x, s.y + yOff, s.z);
+        dummy.rotation.set(0, 0, 0); dummy.scale.set(1, 1, 1);
+        dummy.updateMatrix();
+        im.setMatrixAt(i, dummy.matrix);
+      }
+      im.instanceMatrix.needsUpdate = true;
+      meshes.push(im);
+    };
+    // frame box (centre ≈ y+0.82) carries the tank (centre ≈ y+1.57) — matches buildRoofDetail
+    mk(frameGeo, acMat, spots, 0.82);
+    mk(tankGeo, tankInoxMat, inox, 1.57);
+    mk(tankGeo, tankMat, blue, 1.57);
+    return meshes;
+  }
+
   /** Free every geometry, material and canvas-texture this module created. */
   function dispose() {
     for (const t of textures) {
@@ -852,6 +893,7 @@ export function createHanoiFacades(THREE_arg) {
     materials,
     pickVariant,
     buildRoofDetail,
+    buildRoofTankField,
     dispose,
   };
 }
