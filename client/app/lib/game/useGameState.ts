@@ -4,7 +4,7 @@ import { VEYRA } from '../../data';
 import { detectLite } from '../theme/detect';
 import i18n from '../i18n';
 import { api, setToken } from '../api/client';
-import type { PublicUser, ApiQuestEntry, ApiVoucher, ApiCheckinResult, ApiLeaderboard, ApiReferral } from '../api/client';
+import type { PublicUser, ApiQuestEntry, ApiVoucher, ApiCheckinResult, ApiLeaderboard, ApiReferral, ApiCollectionEntry } from '../api/client';
 import type {
   Game, Player, CartLine, ScreenName, ScreenParams, WorldPanel, NavSignal, NavDir, AuthState,
 } from './types';
@@ -26,6 +26,7 @@ interface PersistedState {
   favorites?: string[];
   claimedQuests?: string[];
   usedVoucher?: string | null;
+  purchased?: string[];
 }
 
 /** Coins required per level — level rises every COINS_PER_LEVEL coins. */
@@ -155,6 +156,8 @@ export function useGameState(): GameState {
   const [streakReward, setStreakReward] = React.useState<ApiCheckinResult | null>(null);
   const [leaderboard, setLeaderboard] = React.useState<ApiLeaderboard | null>(null);
   const [referral, setReferral] = React.useState<ApiReferral | null>(null);
+  const [collections, setCollections] = React.useState<ApiCollectionEntry[]>([]);
+  const [purchased, setPurchased] = React.useState<string[]>(saved.purchased || []);
   const [npcOpen, setNpc] = React.useState<string | null>(null);
   const [prodOpen, setProd] = React.useState<string | null>(null);
   const [worldPanel, setWorldPanel] = React.useState<WorldPanel | null>(null);
@@ -193,12 +196,12 @@ export function useGameState(): GameState {
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify({
           v: STATE_VERSION,
-          state: { lang, player, screen, params, cart, coins, favorites, claimedQuests, usedVoucher },
+          state: { lang, player, screen, params, cart, coins, favorites, claimedQuests, usedVoucher, purchased },
         }));
       } catch { /* quota / private mode — ignore */ }
     }, PERSIST_DEBOUNCE_MS);
     return () => clearTimeout(id);
-  }, [lang, player, screen, params, cart, coins, favorites, claimedQuests, usedVoucher]);
+  }, [lang, player, screen, params, cart, coins, favorites, claimedQuests, usedVoucher, purchased]);
 
   const flashMsg = React.useCallback((m: string) => {
     setFlash(m);
@@ -322,6 +325,34 @@ export function useGameState(): GameState {
     if (!readToken()) return;
     api.getReferral().then(setReferral).catch(() => {});
   }, []);
+
+  // Local purchase history (the checkout is a mock — no server order yet). Used
+  // to detect the "owned" tier of look collections.
+  const recordPurchase = React.useCallback((ids: string[]) => {
+    if (ids.length === 0) return;
+    setPurchased((p) => Array.from(new Set([...p, ...ids])));
+  }, []);
+
+  const refreshCollections = React.useCallback(() => {
+    if (!readToken()) return;
+    api.getMyCollections().then(setCollections).catch(() => {});
+  }, []);
+
+  const claimCollection = React.useCallback((key: string, tier: 'styled' | 'owned') => {
+    if (!authedRef.current) return;
+    api.claimCollection(key, tier)
+      .then(async () => {
+        flashMsg(t('flashRewardGot'));
+        try {
+          const u = await api.me();
+          if (typeof u.coins === 'number') setCoins(u.coins);
+          if (typeof u.renown === 'number') setRenown(u.renown);
+        } catch { /* offline */ }
+        refreshCollections();
+        void refreshProgress();
+      })
+      .catch(() => flashMsg(t('saveFailed')));
+  }, [flashMsg, t, refreshCollections, refreshProgress]);
 
   const toggleFavorite = React.useCallback((id: string) => {
     const adding = !favRef.current.includes(id);
@@ -447,6 +478,7 @@ export function useGameState(): GameState {
     setEarnedVouchers([]);
     setLeaderboard(null);
     setReferral(null);
+    setCollections([]);
     // Drop the player back into the world as a guest — they respawn OUTSIDE the
     // perimeter fence (WorldScreen rebuilds the scene on logout) and must pass a
     // gate's ticket check again to re-enter.
@@ -476,7 +508,8 @@ export function useGameState(): GameState {
     }
     void refreshProgress();
     refreshReferral();
-  }, [refreshProgress, refreshReferral]);
+    refreshCollections();
+  }, [refreshProgress, refreshReferral, refreshCollections]);
 
   // Capture a referral code from the share link (?ref=CODE) on first load.
   React.useEffect(() => { captureRefFromUrl(); }, []);
@@ -533,6 +566,8 @@ export function useGameState(): GameState {
     streak, streakBest, checkin, streakReward, dismissStreakReward,
     leaderboard, refreshLeaderboard,
     referral, refreshReferral,
+    collections, refreshCollections, claimCollection,
+    purchased, recordPurchase,
     quests, refreshProgress,
     earnedRewards, earnedVouchers, hasReward,
     favorites, isFavorite, toggleFavorite,
@@ -547,11 +582,12 @@ export function useGameState(): GameState {
     lang, player, screen, params, cart, coins, npcOpen, prodOpen, worldPanel, lite,
     cartCount, cartTotal, level, levelProgress,
     renown, rank, rankUp, dismissRankUp, quests, earnedRewards, earnedVouchers,
-    streak, streakBest, streakReward, leaderboard, referral,
+    streak, streakBest, streakReward, leaderboard, referral, collections, purchased,
     favorites, claimedQuests, usedVoucher,
     auth, authOpen, openAuth, closeAuth,
     t, go, back, addToCart, setQty, removeItem, clearCart, addCoins,
     recordRenown, refreshProgress, hasReward, checkin, dismissStreakReward, refreshLeaderboard, refreshReferral,
+    refreshCollections, claimCollection, recordPurchase,
     isFavorite, toggleFavorite, claimQuest, useVoucher,
     openNPC, closeNPC, openProduct, closeProduct, openWorldPanel, closeWorldPanel, flashMsg,
   ]);

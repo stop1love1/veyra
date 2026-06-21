@@ -72,7 +72,7 @@ export function CheckoutScreen({ g }: { g: Game }) {
       </div>
 
       <div className="v-cart-foot">
-        <Btn variant="primary" size="lg" full icon="shield" onClick={() => g.go('success')}>
+        <Btn variant="primary" size="lg" full icon="shield" onClick={() => { g.recordPurchase(g.cart.map((l) => l.id)); g.go('success'); }}>
           {g.t('payNow')} · {VEYRA.money(total)}
         </Btn>
       </div>

@@ -2,7 +2,7 @@
 import type { Lang } from '../../data/types';
 import type { PublicUser } from '../api/client';
 import type { RankInfo, RenownSource } from './renown';
-import type { ApiQuestEntry, ApiVoucher, ApiCheckinResult, ApiLeaderboard, ApiReferral } from '../api/client';
+import type { ApiQuestEntry, ApiVoucher, ApiCheckinResult, ApiLeaderboard, ApiReferral, ApiCollectionEntry } from '../api/client';
 
 export type ScreenName =
   | 'gate' | 'splash' | 'create' | 'world'
@@ -22,7 +22,7 @@ export interface AuthState {
   refresh(): Promise<void>;       // re-hydrate user/role via api.me()
 }
 
-export type WorldPanel = 'quests' | 'cart';
+export type WorldPanel = 'quests' | 'cart' | 'passport';
 
 export type NavDir = 'forward' | 'back';
 
@@ -114,6 +114,14 @@ export interface Game {
   /** The caller's referral code + successful-invite count (null = guest). */
   referral: ApiReferral | null;
   refreshReferral: () => void;
+
+  /** Look collections joined with the caller's claim state. */
+  collections: ApiCollectionEntry[];
+  refreshCollections: () => void;
+  claimCollection: (key: string, tier: 'styled' | 'owned') => void;
+  /** Product ids the player has purchased (local; for the "owned" tier). */
+  purchased: string[];
+  recordPurchase: (ids: string[]) => void;
 
   /** The caller's quests joined with their progress (from GET /me/quests). */
   quests: ApiQuestEntry[];

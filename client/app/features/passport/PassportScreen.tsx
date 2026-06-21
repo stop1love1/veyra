@@ -22,8 +22,9 @@ export function PassportScreen({ g, embed }: ScreenProps) {
   const next = rank.nextThreshold;
   const [tab, setTab] = React.useState<'info' | 'board'>('info');
 
-  // Rank/renown/streak come from the account; refresh vouchers + referral on open.
-  React.useEffect(() => { g.refreshProgress(); g.refreshReferral(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // Rank/renown/streak come from the account; refresh vouchers + referral +
+  // collections on open.
+  React.useEffect(() => { g.refreshProgress(); g.refreshReferral(); g.refreshCollections(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const [copied, setCopied] = React.useState(false);
   const refCode = g.referral?.code || '';
   const refLink = refCode && typeof window !== 'undefined' ? `${window.location.origin}/u/${refCode}` : '';
@@ -78,6 +79,44 @@ export function PassportScreen({ g, embed }: ScreenProps) {
           </div>
         ))}
       </div>
+
+      {g.collections.length > 0 && (
+        <React.Fragment>
+          <div className="v-pp-section">{g.t('collections')}</div>
+          <div className="v-coll-list">
+            {g.collections.map(({ collection: c, userCollection: uc }) => {
+              const n = c.productIds.length;
+              const styledN = c.productIds.filter((id) => g.favorites.includes(id)).length;
+              const ownedN = c.productIds.filter((id) => g.purchased.includes(id)).length;
+              const styledDone = styledN >= n;
+              const ownedDone = ownedN >= n;
+              const tierRow = (
+                label: string, count: number, done: boolean,
+                claimed: boolean, tier: 'styled' | 'owned',
+              ) => (
+                <div className="v-coll-tier">
+                  <span className="v-coll-tier-lbl">{label}</span>
+                  <span className="v-mono v-coll-tier-prog">{Math.min(count, n)}/{n}</span>
+                  <button
+                    className={'v-quest-claim' + (done && !claimed ? ' is-on' : '')}
+                    disabled={!done || claimed}
+                    onClick={() => g.claimCollection(c.key, tier)}
+                  >
+                    {claimed ? g.t('claimed') : g.t('claim')}
+                  </button>
+                </div>
+              );
+              return (
+                <div key={c.key} className="v-coll">
+                  <div className="v-coll-title">{VEYRA.tx(c.title, g.lang)}</div>
+                  {tierRow(g.t('styled'), styledN, styledDone, !!uc?.styledClaimed, 'styled')}
+                  {tierRow(g.t('owned'), ownedN, ownedDone, !!uc?.ownedClaimed, 'owned')}
+                </div>
+              );
+            })}
+          </div>
+        </React.Fragment>
+      )}
 
       {refCode && (
         <React.Fragment>

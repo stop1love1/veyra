@@ -389,6 +389,31 @@ export interface ApiPublicProfile {
   referralCount: number;
 }
 
+// ── Collections (Collector) ────────────────────────────────────────────────
+export interface ApiCollectionReward {
+  coins: number;
+  renown: number;
+  voucherCode?: string;
+}
+
+export interface ApiCollection {
+  key: string;
+  title: I18nField;
+  productIds: string[];
+  styledReward: ApiCollectionReward;
+  ownedReward: ApiCollectionReward;
+}
+
+export interface ApiUserCollection {
+  styledClaimed: boolean;
+  ownedClaimed: boolean;
+}
+
+export interface ApiCollectionEntry {
+  collection: ApiCollection;
+  userCollection: ApiUserCollection | null;
+}
+
 /** Product create/update payload — mirrors the server CreateProductDto. */
 export interface ProductDto {
   shopId: string;
@@ -607,6 +632,21 @@ export const api = {
   /** Public share-card data for a referral code (no auth). */
   getPublicProfile(code: string, opts?: RequestOptions): Promise<ApiPublicProfile> {
     return http.get<ApiPublicProfile>(`/u/${encodeURIComponent(code)}`, opts);
+  },
+
+  /** Public look-collection catalogue. */
+  getCollections(opts?: RequestOptions): Promise<ApiCollection[]> {
+    return http.get<ApiCollection[] | { data: ApiCollection[] }>('/collections', opts).then(asArray<ApiCollection>);
+  },
+
+  /** The caller's collection claim-state joined with each collection. */
+  getMyCollections(opts?: RequestOptions): Promise<ApiCollectionEntry[]> {
+    return http.get<ApiCollectionEntry[] | { data: ApiCollectionEntry[] }>('/me/collections', opts).then(asArray<ApiCollectionEntry>);
+  },
+
+  /** Claim a collection tier's reward (once). */
+  claimCollection(key: string, tier: 'styled' | 'owned', opts?: RequestOptions): Promise<ApiUserCollection> {
+    return http.post<ApiUserCollection>(`/me/collections/${encodeURIComponent(key)}/claim`, { tier }, opts);
   },
 };
 
