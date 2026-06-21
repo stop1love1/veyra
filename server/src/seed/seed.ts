@@ -40,6 +40,10 @@ import { Shop, ShopSchema } from '../shops/schemas/shop.schema';
 import { Npc, NpcSchema } from '../npcs/schemas/npc.schema';
 import { Quest, QuestSchema } from '../quests/schemas/quest.schema';
 import { Voucher, VoucherSchema } from '../vouchers/schemas/voucher.schema';
+import {
+  Collection,
+  CollectionSchema,
+} from '../collections/schemas/collection.schema';
 
 // ── Config ──────────────────────────────────────────────────────────────────
 
@@ -214,6 +218,10 @@ async function seed(): Promise<void> {
     VoucherSchema,
   );
   const Quests: Model<Quest> = mongoose.model<Quest>(Quest.name, QuestSchema);
+  const Collections: Model<Collection> = mongoose.model<Collection>(
+    Collection.name,
+    CollectionSchema,
+  );
 
   // ── 1. Users (upsert by email) ────────────────────────────────────────────
   async function upsertUser(
@@ -601,6 +609,41 @@ async function seed(): Promise<void> {
     ).exec();
   }
   console.log(`[seed] quests ok (${questSpecs.length})`);
+
+  // ── 6. Collections (upsert by key) — Collector look sets ──────────────────
+  const collectionSpecs = [
+    {
+      key: 'work-elegant',
+      title: i18n('Thanh lịch công sở', 'Office Elegant'),
+      productIds: ['blazer', 'trousers', 'tote'],
+      styledReward: { coins: 40, renown: 30 },
+      ownedReward: { coins: 200, renown: 80, voucherCode: 'WELCOME10' },
+    },
+    {
+      key: 'weekend-casual',
+      title: i18n('Dạo phố cuối tuần', 'Weekend Casual'),
+      productIds: ['linen', 'skirt', 'knit'],
+      styledReward: { coins: 40, renown: 30 },
+      ownedReward: { coins: 200, renown: 80, voucherCode: 'FREESHIP' },
+    },
+  ];
+  for (const c of collectionSpecs) {
+    await Collections.findOneAndUpdate(
+      { key: c.key },
+      {
+        $set: {
+          title: c.title,
+          productIds: c.productIds,
+          styledReward: c.styledReward,
+          ownedReward: c.ownedReward,
+          active: true,
+        },
+        $setOnInsert: { key: c.key },
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true },
+    ).exec();
+  }
+  console.log(`[seed] collections ok (${collectionSpecs.length})`);
 
   // ── Summary ───────────────────────────────────────────────────────────────
   console.log('────────────────────────────────────────────');

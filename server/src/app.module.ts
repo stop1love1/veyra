@@ -6,6 +6,7 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
 import { CartModule } from './cart/cart.module';
+import { CollectionsModule } from './collections/collections.module';
 import { JwtAuthGuard } from './common/jwt-auth.guard';
 import { RolesGuard } from './common/roles.guard';
 import { ItemsModule } from './items/items.module';
@@ -47,6 +48,7 @@ import { VouchersModule } from './vouchers/vouchers.module';
     QuestsModule,
     ProgressionModule,
     ReferralModule,
+    CollectionsModule,
     VouchersModule,
     RealtimeModule,
   ],
